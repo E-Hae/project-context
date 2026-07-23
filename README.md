@@ -4,7 +4,7 @@
 [![license](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Node.js 20+](https://img.shields.io/badge/node-%3E%3D20-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
 
-`project-context` is an evidence-first local MCP server and CLI for navigating
+`project-context-mcp` is an evidence-first local MCP server and CLI for navigating
 codebases. It performs deterministic status checks, exact and semantic search,
 bounded source reads, optional source-backed tracing adapters, and explicit
 handoff access.
@@ -29,7 +29,7 @@ Install the CLI globally:
 
 ```sh
 npm install --global project-context-mcp
-project-context --help
+project-context-mcp --help
 ```
 
 To enable C# tracing, install the optional C# adapter alongside the core:
@@ -42,15 +42,15 @@ Then add a `.project-context.yml` file to the project you want to inspect and
 run a status check:
 
 ```sh
-project-context status /path/to/project
-project-context index /path/to/project
-project-context search /path/to/project "session restore" auto code 10
+project-context-mcp status /path/to/project
+project-context-mcp index /path/to/project
+project-context-mcp search /path/to/project "session restore" auto code 10
 ```
 
 On Windows, quote paths that contain spaces:
 
 ```powershell
-project-context status 'C:\work\my project'
+project-context-mcp status 'C:\work\my project'
 ```
 
 ### Connect an MCP client
@@ -60,8 +60,8 @@ Add this standard MCP server entry to your client's configuration:
 ```json
 {
   "mcpServers": {
-    "project-context": {
-      "command": "project-context",
+    "project-context-mcp": {
+      "command": "project-context-mcp",
       "args": ["serve", "--mcp"]
     }
   }
@@ -90,7 +90,7 @@ reads, status checks, and handoff access do not require Ollama or Milvus.
 
 ## Trace adapters
 
-`context_trace` and `project-context trace` use an installed trace adapter.
+`context_trace` and `project-context-mcp trace` use an installed trace adapter.
 The core discovers the built-in C# candidate and any comma-separated package
 names in `PROJECT_CONTEXT_TRACE_ADAPTERS`. It selects the single adapter whose
 source extensions match the project, or requires `language` when several match.
@@ -179,15 +179,15 @@ not need them.
 
 | Command | Purpose |
 | --- | --- |
-| `project-context status [project-root]` | Check configuration, dependencies, and index freshness. |
-| `project-context index <project-root> [--rebuild]` | Create or incrementally update the semantic index. |
-| `project-context watch <project-root> [interval-ms]` | Keep an index current with filesystem events and safety scans. |
-| `project-context search <project-root> <query> [mode] [scope] [max-results]` | Search in `auto`, `exact`, `graph`, or `semantic` mode. |
-| `project-context trace <project-root> <symbol> <direction> [max-results] [language]` | Trace relationships with an installed language adapter. |
-| `project-context read <project-root> <path> [start-line] [end-line]` | Read an allowed, bounded file range. |
-| `project-context ask <project-root> <question>` | Produce a local, source-cited development answer. |
-| `project-context handoff save|update ...` | Create or update explicit handoff Markdown. |
-| `project-context serve --mcp` | Start the stdio MCP server. |
+| `project-context-mcp status [project-root]` | Check configuration, dependencies, and index freshness. |
+| `project-context-mcp index <project-root> [--rebuild]` | Create or incrementally update the semantic index. |
+| `project-context-mcp watch <project-root> [interval-ms]` | Keep an index current with filesystem events and safety scans. |
+| `project-context-mcp search <project-root> <query> [mode] [scope] [max-results]` | Search in `auto`, `exact`, `graph`, or `semantic` mode. |
+| `project-context-mcp trace <project-root> <symbol> <direction> [max-results] [language]` | Trace relationships with an installed language adapter. |
+| `project-context-mcp read <project-root> <path> [start-line] [end-line]` | Read an allowed, bounded file range. |
+| `project-context-mcp ask <project-root> <question>` | Produce a local, source-cited development answer. |
+| `project-context-mcp handoff save|update ...` | Create or update explicit handoff Markdown. |
+| `project-context-mcp serve --mcp` | Start the stdio MCP server. |
 
 ## Development
 
@@ -207,7 +207,7 @@ C# adapter tarball includes its worker and Microsoft third-party notices.
 
 ## Migration from 0.3.x
 
-Upgrade the core to `project-context-mcp@1.0.0`. If you used C# tracing in
+Upgrade the core to `project-context-mcp@1.0.1`. If you used C# tracing in
 0.3.x, install `project-context-mcp-csharp@1.0.0` and ensure .NET 8 is
 available. No project configuration change is required for the existing C#
 trace command. Core-only installations remain fully supported; only graph

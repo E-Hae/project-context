@@ -1,6 +1,6 @@
 {
   "name": "project-context-mcp",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "license": "MIT",
   "type": "module",
   "description": "Evidence-first local MCP server and CLI for codebase discovery, search, and source-backed tracing adapters.",
@@ -35,7 +35,7 @@
     "access": "public"
   },
   "bin": {
-    "project-context": "dist/src/cli.js"
+    "project-context-mcp": "dist/src/cli.js"
   },
   "scripts": {
     "clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
