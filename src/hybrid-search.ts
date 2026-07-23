@@ -125,7 +125,7 @@ function graphRequest(query: string): {
   const symbol = extractGraphSymbol(query);
   if (symbol === null) {
     throw new HybridSearchError(
-      "Graph search requires a C# type or method symbol; use context_trace to provide one explicitly",
+      "Graph search requires a type or method symbol; use context_trace to provide one explicitly",
       "invalid_graph_query",
     );
   }
@@ -205,7 +205,9 @@ export async function searchProject(
       } catch (error) {
         if (
           !(error instanceof GraphTraceError) ||
-          error.code !== "symbol_not_found" ||
+          (error.code !== "symbol_not_found" &&
+            error.code !== "adapter_unavailable" &&
+            error.code !== "trace_language_required") ||
           mode === "graph"
         ) {
           throw error;

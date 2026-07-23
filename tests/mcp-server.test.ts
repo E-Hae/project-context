@@ -8,6 +8,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 
 import { createProjectContextServer } from "../src/mcp-server.js";
+import { GraphTraceError } from "../src/graph-client.js";
 
 test("context_status is exposed through MCP and returns structured content", async () => {
   const projectRoot = await mkdtemp(path.join(tmpdir(), "project-context-mcp-"));
@@ -211,5 +212,34 @@ test("context_status is exposed through MCP and returns structured content", asy
     await client.close();
     await server.close();
     await rm(projectRoot, { recursive: true, force: true });
+  }
+});
+
+test("context_trace returns a trace language selection error to MCP callers", async () => {
+  const server = createProjectContextServer({
+    trace: async () => {
+      throw new GraphTraceError("Specify a language", "trace_language_required");
+    },
+  });
+  const client = new Client({ name: "project-context-test", version: "0.1.0" });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  await server.connect(serverTransport);
+  await client.connect(clientTransport);
+  try {
+    const result = await client.callTool({
+      name: "context_trace",
+      arguments: {
+        projectPath: ".",
+        symbol: "Feature.Target",
+        direction: "callers",
+        language: "python",
+      },
+    });
+    assert.equal(result.isError, true);
+    const content = result.content as Array<{ text?: string }>;
+    assert.match(content[0]?.text ?? "", /Specify a language/);
+  } finally {
+    await client.close();
+    await server.close();
   }
 });

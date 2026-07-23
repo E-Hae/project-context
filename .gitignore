@@ -1,8 +1,8 @@
 node_modules/
 dist/
 coverage/
-workers/roslyn/bin/
-workers/roslyn/obj/
+adapters/csharp/workers/roslyn/bin/
+adapters/csharp/workers/roslyn/obj/
 
 # Local evaluation inputs and results can identify private target projects.
 eval/

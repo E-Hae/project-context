@@ -1,16 +1,15 @@
 {
   "name": "project-context-mcp",
-  "version": "0.3.0",
+  "version": "1.0.0",
   "license": "MIT",
   "type": "module",
-  "description": "Evidence-first local MCP server and CLI for codebase discovery, search, and C# relationship tracing.",
+  "description": "Evidence-first local MCP server and CLI for codebase discovery, search, and source-backed tracing adapters.",
   "keywords": [
     "mcp",
     "model-context-protocol",
     "code-search",
     "codebase",
     "semantic-search",
-    "roslyn",
     "developer-tools"
   ],
   "repository": {
@@ -23,12 +22,15 @@
   "homepage": "https://github.com/E-Hae/project-context#readme",
   "files": [
     "dist/src",
-    "workers/roslyn/bin/Release/net8.0",
-    "workers/roslyn/Program.cs",
-    "workers/roslyn/ProjectContext.Roslyn.csproj",
     "LICENSE",
     "THIRD_PARTY_NOTICES.md"
   ],
+  "workspaces": [
+    "adapters/*"
+  ],
+  "exports": {
+    "./trace-adapter": "./dist/src/trace-adapter.js"
+  },
   "publishConfig": {
     "access": "public"
   },
@@ -36,14 +38,12 @@
     "project-context": "dist/src/cli.js"
   },
   "scripts": {
+    "clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
     "build": "tsc -p tsconfig.json",
-    "build:roslyn": "dotnet build workers/roslyn/ProjectContext.Roslyn.csproj -c Release",
-    "build:all": "npm run build && npm run build:roslyn",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "npm run build && node --test \"dist/tests/*.test.js\"",
-    "test:roslyn": "npm run build && npm run build:roslyn && node --test dist/tests/roslyn-worker.integration.test.js",
+    "test": "npm run clean && npm run build && node --test \"dist/tests/*.test.js\"",
     "status": "node dist/src/cli.js status",
-    "verify": "npm run typecheck && npm test && npm run test:roslyn",
+    "verify": "npm run typecheck && npm test",
     "prepublishOnly": "npm run verify"
   },
   "engines": {

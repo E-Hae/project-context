@@ -38,7 +38,7 @@ export function createProjectContextServer(
     {
       title: "Project context status",
       description:
-        "Checks the project root, configuration, ripgrep, Ollama embedding model, selected vector store, Roslyn worker, and handoff registration.",
+        "Checks the project root, configuration, ripgrep, Ollama embedding model, selected vector store, trace-adapter capability, and handoff registration.",
       inputSchema: {
         projectPath: z.string().min(1).describe("Absolute or relative project path"),
       },
@@ -170,18 +170,19 @@ export function createProjectContextServer(
   server.registerTool(
     "context_trace",
     {
-      title: "Trace C# symbol relationships",
+      title: "Trace symbol relationships",
       description:
-        "Uses the built local Roslyn worker to return source-backed callers, callees, inheritance, or interface relationships without guessing unresolved edges.",
+        "Uses a selected trace adapter to return source-backed callers, callees, inheritance, or interface relationships without guessing unresolved edges.",
       inputSchema: {
         projectPath: z.string().min(1).describe("Absolute or relative project path"),
         symbol: z
           .string()
           .min(1)
           .max(512)
-          .describe("C# symbol such as QuestManager.MoveToQuestPosition"),
+          .describe("Symbol such as Namespace.Type.Member"),
         direction: z.enum(["callers", "callees", "inherits", "implements"]),
         maxResults: z.number().int().min(1).max(200).default(50),
+        language: z.string().min(1).max(128).optional().describe("Trace adapter language when more than one adapter matches"),
       },
       annotations: {
         readOnlyHint: true,
@@ -190,13 +191,14 @@ export function createProjectContextServer(
         openWorldHint: false,
       },
     },
-    async ({ projectPath, symbol, direction, maxResults }) => {
+    async ({ projectPath, symbol, direction, maxResults, language }) => {
       try {
         const result = await (options.trace ?? traceProject)({
           projectPath,
           symbol,
           direction,
           maxResults,
+          ...(language === undefined ? {} : { language }),
         });
         return {
           content: [{ type: "text", text: JSON.stringify(result, null, 2) }],

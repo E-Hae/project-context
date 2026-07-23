@@ -81,13 +81,6 @@ function graphResult(withEdge: boolean): GraphTraceResult {
       filesRequested: 1,
       filesLoaded: 1,
       filesSkipped: 0,
-      metadataFailures: 0,
-      projectFilesRead: 0,
-      assemblyDefinitionsLoaded: 0,
-      referencesLoaded: 1,
-      referenceFailures: 0,
-      parseErrors: 0,
-      unresolvedCandidates: 0,
       partial: false,
       elapsedMs: 1,
       messages: [],
@@ -101,24 +94,22 @@ function graphResult(withEdge: boolean): GraphTraceResult {
               fullName: "Caller.Invoke",
               signature: "Caller.Invoke()",
               kind: "method",
-              assembly: "Fixture",
               path: "src/Caller.cs",
               lineStart: 1,
               lineEnd: 1,
               fileHash: "a".repeat(64),
-              unityMessage: false,
+              metadata: { assembly: "Fixture", unityMessage: false },
             },
             to: {
               name: "Target",
               fullName: "Feature.Target",
               signature: "Feature.Target()",
               kind: "method",
-              assembly: "Fixture",
               path: "src/Feature.cs",
               lineStart: 1,
               lineEnd: 1,
               fileHash: "b".repeat(64),
-              unityMessage: false,
+              metadata: { assembly: "Fixture", unityMessage: false },
             },
             evidence: {
               path: "src/Caller.cs",
@@ -244,7 +235,7 @@ test("auto mode falls back once only for an empty exact or graph route", async (
   assert.equal(semanticCalls, 2);
 });
 
-test("auto mode only treats graph symbol-not-found as an empty route", async () => {
+test("auto mode falls back for a missing graph symbol or trace adapter", async () => {
   const baseDependencies = {
     searchExact: async () => exactResult(false),
     searchSemantic: async () => semanticResult(),
@@ -263,21 +254,19 @@ test("auto mode only treats graph symbol-not-found as an empty route", async () 
   assert.equal(fallback.route, "semantic");
   assert.equal(fallback.fallbackUsed, true);
 
-  await assert.rejects(
-    searchProject(
-      { projectPath: ".", query: "Feature.Target 호출자", mode: "auto" },
-      {
-        dependencies: {
-          ...baseDependencies,
-          traceProject: async () => {
-            throw new GraphTraceError("offline", "worker_unavailable");
-          },
+  const unavailable = await searchProject(
+    { projectPath: ".", query: "Feature.Target 호출자", mode: "auto" },
+    {
+      dependencies: {
+        ...baseDependencies,
+        traceProject: async () => {
+          throw new GraphTraceError("adapter unavailable", "adapter_unavailable");
         },
       },
-    ),
-    (error: unknown) =>
-      error instanceof GraphTraceError && error.code === "worker_unavailable",
+    },
   );
+  assert.equal(unavailable.route, "semantic");
+  assert.equal(unavailable.fallbackUsed, true);
 
   await assert.rejects(
     searchProject(

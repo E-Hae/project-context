@@ -1,6 +1,4 @@
-import { spawn } from "node:child_process";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 
 import { z } from "zod/v4";
 
@@ -21,56 +19,27 @@ import {
   resolveSourceTargets,
   type SourceTarget,
 } from "./source-policy.js";
+import {
+  TraceAdapterError,
+  type TraceAdapter,
+  type TraceAdapterEdge,
+  type TraceDiagnostics,
+  type TraceDirection,
+  type TraceSymbol,
+} from "./trace-adapter.js";
+import {
+  resolveTraceAdapter,
+  TraceAdapterLanguageRequiredError,
+  TraceAdapterUnavailableError,
+} from "./trace-adapter-resolver.js";
 
-export type TraceDirection =
-  | "callers"
-  | "callees"
-  | "inherits"
-  | "implements";
-
-export interface GraphSymbolNode {
-  name: string;
-  fullName: string;
-  signature: string;
-  kind: string;
-  assembly: string;
-  path: string | null;
-  lineStart: number | null;
-  lineEnd: number | null;
-  fileHash: string | null;
-  unityMessage: boolean;
-}
-
-export interface GraphSourceEvidence {
-  path: string;
-  lineStart: number;
-  lineEnd: number;
-  text: string;
-  fileHash: string;
-}
-
-export interface GraphTraceEdge {
-  relation: string;
-  from: GraphSymbolNode;
-  to: GraphSymbolNode;
-  evidence: GraphSourceEvidence;
-}
-
-export interface GraphTraceDiagnostics {
-  filesRequested: number;
-  filesLoaded: number;
-  filesSkipped: number;
-  metadataFailures: number;
-  projectFilesRead: number;
-  assemblyDefinitionsLoaded: number;
-  referencesLoaded: number;
-  referenceFailures: number;
-  parseErrors: number;
-  unresolvedCandidates: number;
-  partial: boolean;
-  elapsedMs: number;
-  messages: string[];
-}
+export type {
+  TraceDirection,
+  TraceSymbol as GraphSymbolNode,
+  TraceAdapterEvidence as GraphSourceEvidence,
+  TraceAdapterEdge as GraphTraceEdge,
+  TraceDiagnostics as GraphTraceDiagnostics,
+} from "./trace-adapter.js";
 
 export interface GraphTraceResult {
   route: "graph";
@@ -83,35 +52,20 @@ export interface GraphTraceResult {
   stale: boolean;
   staleResultsSkipped: number;
   staleSymbolsSkipped: number;
-  matchedSymbols: GraphSymbolNode[];
-  diagnostics: GraphTraceDiagnostics;
-  results: GraphTraceEdge[];
+  matchedSymbols: TraceSymbol[];
+  diagnostics: TraceDiagnostics;
+  results: TraceAdapterEdge[];
   truncated: boolean;
 }
 
-export interface RoslynWorkerRequest {
-  version: 1;
-  projectRoot: string;
-  files: string[];
-  assemblyDefinitions: string[];
-  symbol: string;
-  direction: TraceDirection;
-  maxResults: number;
-}
-
-type RunWorker = (
-  request: RoslynWorkerRequest,
-  workerPath: string,
-  timeoutMs: number,
-) => Promise<unknown>;
-
 export interface TraceProjectOptions {
-  packageRoot?: string;
   timeoutMs?: number;
   now?: () => Date;
-  dependencies?: {
-    runWorker?: RunWorker;
-  };
+  adapter?: TraceAdapter;
+  resolveAdapter?: (selection?: {
+    language?: string;
+    sourceFileExtensions?: readonly string[];
+  }) => Promise<TraceAdapter>;
 }
 
 export class GraphTraceError extends Error {
@@ -120,9 +74,10 @@ export class GraphTraceError extends Error {
     readonly code:
       | "invalid_config"
       | "invalid_request"
-      | "worker_unavailable"
-      | "worker_failed"
-      | "worker_protocol"
+      | "adapter_unavailable"
+      | "adapter_failed"
+      | "adapter_protocol"
+      | "trace_language_required"
       | "symbol_not_found"
       | "ambiguous_symbol",
     readonly candidates: string[] = [],
@@ -132,18 +87,22 @@ export class GraphTraceError extends Error {
   }
 }
 
+const metadataValueSchema = z.union([z.string().max(4_096), z.number().finite(), z.boolean(), z.null()]);
+const metadataSchema = z
+  .record(z.string().min(1).max(128), metadataValueSchema)
+  .refine((value) => Object.keys(value).length <= 32, "Trace adapter metadata has too many entries");
+
 const symbolNodeSchema = z
   .object({
     name: z.string().min(1).max(1_024),
     fullName: z.string().min(1).max(4_096),
     signature: z.string().min(1).max(8_192),
     kind: z.string().min(1).max(128),
-    assembly: z.string().min(1).max(1_024),
     path: z.string().min(1).max(4_096).nullable(),
     lineStart: z.number().int().min(1).nullable(),
     lineEnd: z.number().int().min(1).nullable(),
     fileHash: z.string().regex(/^[a-f0-9]{64}$/).nullable(),
-    unityMessage: z.boolean(),
+    metadata: metadataSchema.optional(),
   })
   .strict();
 
@@ -154,6 +113,7 @@ const evidenceSchema = z
     lineEnd: z.number().int().min(1),
     text: z.string().max(2_000),
     fileHash: z.string().regex(/^[a-f0-9]{64}$/),
+    metadata: metadataSchema.optional(),
   })
   .strict();
 
@@ -162,23 +122,15 @@ const diagnosticsSchema = z
     filesRequested: z.number().int().min(0),
     filesLoaded: z.number().int().min(0),
     filesSkipped: z.number().int().min(0),
-    metadataFailures: z.number().int().min(0),
-    projectFilesRead: z.number().int().min(0),
-    assemblyDefinitionsLoaded: z.number().int().min(0),
-    referencesLoaded: z.number().int().min(0),
-    referenceFailures: z.number().int().min(0),
-    parseErrors: z.number().int().min(0),
-    unresolvedCandidates: z.number().int().min(0),
     partial: z.boolean(),
     elapsedMs: z.number().int().min(0),
     messages: z.array(z.string().max(4_096)).max(20),
+    metadata: metadataSchema.optional(),
   })
   .strict();
 
-const workerSuccessSchema = z
+const adapterResponseSchema = z
   .object({
-    version: z.literal(1),
-    ok: z.literal(true),
     workerVersion: z.string().min(1).max(256),
     symbol: z.string().min(1).max(512),
     direction: z.enum(["callers", "callees", "inherits", "implements"]),
@@ -191,6 +143,7 @@ const workerSuccessSchema = z
             from: symbolNodeSchema,
             to: symbolNodeSchema,
             evidence: evidenceSchema,
+            metadata: metadataSchema.optional(),
           })
           .strict(),
       )
@@ -199,117 +152,6 @@ const workerSuccessSchema = z
     diagnostics: diagnosticsSchema,
   })
   .strict();
-
-const workerFailureSchema = z
-  .object({
-    version: z.literal(1),
-    ok: z.literal(false),
-    error: z
-      .object({
-        code: z.string().min(1).max(128),
-        message: z.string().min(1).max(4_096),
-        candidates: z.array(z.string().max(4_096)).max(1_000),
-      })
-      .strict(),
-    diagnostics: diagnosticsSchema,
-  })
-  .strict();
-
-const workerResponseSchema = z.discriminatedUnion("ok", [
-  workerSuccessSchema,
-  workerFailureSchema,
-]);
-
-const moduleDirectory = path.dirname(fileURLToPath(import.meta.url));
-const DEFAULT_PACKAGE_ROOT = path.resolve(moduleDirectory, "..", "..");
-const MAX_WORKER_OUTPUT_BYTES = 8 * 1024 * 1024;
-
-export function getRoslynWorkerPath(
-  packageRoot = DEFAULT_PACKAGE_ROOT,
-): string {
-  return path.join(
-    packageRoot,
-    "workers",
-    "roslyn",
-    "bin",
-    "Release",
-    "net8.0",
-    "ProjectContext.Roslyn.dll",
-  );
-}
-
-function defaultRunWorker(
-  request: RoslynWorkerRequest,
-  workerPath: string,
-  timeoutMs: number,
-): Promise<unknown> {
-  return new Promise((resolve, reject) => {
-    const child = spawn("dotnet", [workerPath], {
-      shell: false,
-      windowsHide: true,
-      stdio: ["pipe", "pipe", "pipe"],
-    });
-    let stdout = "";
-    let stderr = "";
-    let settled = false;
-    let timedOut = false;
-
-    const fail = (error: Error): void => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      child.kill();
-      reject(error);
-    };
-    const timer = setTimeout(() => {
-      timedOut = true;
-      child.kill();
-    }, timeoutMs);
-
-    child.stdout.setEncoding("utf8");
-    child.stdout.on("data", (chunk: string) => {
-      stdout += chunk;
-      if (Buffer.byteLength(stdout) > MAX_WORKER_OUTPUT_BYTES) {
-        fail(new Error("Roslyn worker output exceeded the size limit"));
-      }
-    });
-    child.stderr.setEncoding("utf8");
-    child.stderr.on("data", (chunk: string) => {
-      if (Buffer.byteLength(stderr) < 256 * 1024) stderr += chunk;
-    });
-    child.once("error", (error) => fail(error));
-    child.once("close", (code) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      if (timedOut) {
-        reject(new Error(`Roslyn worker timed out after ${timeoutMs}ms`));
-        return;
-      }
-      try {
-        const parsed = JSON.parse(stdout.trim()) as unknown;
-        if (code !== 0 && code !== 1) {
-          reject(
-            new Error(
-              stderr.trim() || `Roslyn worker exited with code ${String(code)}`,
-            ),
-          );
-          return;
-        }
-        resolve(parsed);
-      } catch {
-        reject(
-          new Error(
-            stderr.trim() || `Roslyn worker returned invalid JSON (exit ${String(code)})`,
-          ),
-        );
-      }
-    });
-
-    child.stdin.once("error", (error) => fail(error));
-    child.stdin.end(JSON.stringify(request));
-  });
-}
 
 function pathKey(value: string): string {
   const normalized = value.replaceAll("\\", "/");
@@ -366,7 +208,8 @@ async function verifyCollectedFiles(
 function validateNode(
   node: z.infer<typeof symbolNodeSchema>,
   allowedFiles: Map<string, CollectedSourceFile>,
-): GraphSymbolNode {
+): TraceSymbol {
+  const { metadata, ...base } = node;
   if (node.path === null) {
     if (
       node.lineStart !== null ||
@@ -374,17 +217,20 @@ function validateNode(
       node.fileHash !== null
     ) {
       throw new GraphTraceError(
-        "Roslyn worker returned source lines without a source path",
-        "worker_protocol",
+        "Trace adapter returned source lines without a source path",
+        "adapter_protocol",
       );
     }
-    return node;
+    return {
+      ...base,
+      ...(metadata === undefined ? {} : { metadata }),
+    };
   }
   const normalizedPath = node.path.replaceAll("\\", "/");
   if (!allowedFiles.has(pathKey(normalizedPath))) {
     throw new GraphTraceError(
-      `Roslyn worker returned a source outside the allowed set: ${node.path}`,
-      "worker_protocol",
+      `Trace adapter returned a source outside the allowed set: ${node.path}`,
+      "adapter_protocol",
     );
   }
   if (
@@ -394,21 +240,46 @@ function validateNode(
     node.fileHash === null
   ) {
     throw new GraphTraceError(
-      "Roslyn worker returned invalid symbol source lines",
-      "worker_protocol",
+      "Trace adapter returned invalid symbol source lines",
+      "adapter_protocol",
     );
   }
-  return { ...node, path: normalizedPath };
+  return {
+    ...base,
+    path: normalizedPath,
+    ...(metadata === undefined ? {} : { metadata }),
+  };
 }
 
-function workerFailureCode(
-  value: string,
-): GraphTraceError["code"] {
-  if (value === "symbol_not_found" || value === "ambiguous_symbol") return value;
-  if (value === "invalid_request" || value === "invalid_symbol" || value === "invalid_direction") {
-    return "invalid_request";
+function normalizeDiagnostics(
+  diagnostics: z.infer<typeof diagnosticsSchema>,
+): TraceDiagnostics {
+  const { metadata, ...base } = diagnostics;
+  return {
+    ...base,
+    ...(metadata === undefined ? {} : { metadata }),
+  };
+}
+
+function adapterErrorDetails(
+  error: unknown,
+): { code: TraceAdapterError["code"]; candidates: string[] } | null {
+  if (error instanceof TraceAdapterError) {
+    return { code: error.code, candidates: error.candidates };
   }
-  return "worker_failed";
+  if (typeof error !== "object" || error === null) return null;
+  const value = error as Record<string, unknown>;
+  const code = value.code;
+  const candidates = Array.isArray(value.candidates)
+    ? value.candidates.filter((candidate): candidate is string => typeof candidate === "string")
+    : [];
+  return code === "unavailable" ||
+      code === "failed" ||
+      code === "invalid_request" ||
+      code === "symbol_not_found" ||
+      code === "ambiguous_symbol"
+    ? { code, candidates }
+    : null;
 }
 
 export async function traceProject(
@@ -417,6 +288,7 @@ export async function traceProject(
     symbol: string;
     direction: TraceDirection;
     maxResults?: number;
+    language?: string;
   },
   options: TraceProjectOptions = {},
 ): Promise<GraphTraceResult> {
@@ -448,9 +320,35 @@ export async function traceProject(
     loadedConfig.value.exclude,
     Math.min(options.timeoutMs ?? 90_000, 30_000),
   );
+  let adapter: TraceAdapter;
+  try {
+    adapter = options.adapter ?? await (options.resolveAdapter ?? resolveTraceAdapter)({
+      ...(input.language === undefined ? {} : { language: input.language }),
+      sourceFileExtensions: [...new Set(collected.map((file) =>
+        path.extname(file.relativePath).toLocaleLowerCase("en-US"),
+      ))],
+    });
+  } catch (error) {
+    if (error instanceof TraceAdapterUnavailableError) {
+      throw new GraphTraceError(error.message, "adapter_unavailable", error.candidates);
+    }
+    if (error instanceof TraceAdapterLanguageRequiredError) {
+      throw new GraphTraceError(error.message, "trace_language_required", error.candidates);
+    }
+    throw new GraphTraceError(
+      error instanceof Error ? error.message : String(error),
+      "adapter_failed",
+    );
+  }
+  const sourceExtensions = new Set(
+    adapter.sourceFileExtensions.map((extension) => extension.toLowerCase()),
+  );
+  const auxiliaryExtensions = new Set(
+    (adapter.auxiliaryFileExtensions ?? []).map((extension) => extension.toLowerCase()),
+  );
   const relevant = collected.filter((file) => {
     const extension = path.extname(file.relativePath).toLowerCase();
-    return extension === ".cs" || extension === ".asmdef";
+    return sourceExtensions.has(extension) || auxiliaryExtensions.has(extension);
   });
   const verified = await verifyCollectedFiles(
     project.root,
@@ -458,63 +356,63 @@ export async function traceProject(
     targets,
     loadedConfig.value.exclude,
   );
-  const sourceFiles = verified.filter(
-    (file) => path.extname(file.relativePath).toLowerCase() === ".cs",
+  const sourceFiles = verified.filter((file) =>
+    sourceExtensions.has(path.extname(file.relativePath).toLowerCase()),
   );
-  const assemblyDefinitions = verified.filter(
-    (file) => path.extname(file.relativePath).toLowerCase() === ".asmdef",
+  const auxiliaryFiles = verified.filter((file) =>
+    auxiliaryExtensions.has(path.extname(file.relativePath).toLowerCase()),
   );
   if (sourceFiles.length === 0) {
     throw new GraphTraceError(
-      "No configured C# source files are available",
+      `No configured ${adapter.language} source files are available`,
       "invalid_request",
     );
   }
 
-  const request: RoslynWorkerRequest = {
-    version: 1,
+  const request = {
     projectRoot: project.root,
     files: sourceFiles.map((file) => file.relativePath),
-    assemblyDefinitions: assemblyDefinitions.map((file) => file.relativePath),
+    auxiliaryFiles: auxiliaryFiles.map((file) => file.relativePath),
     symbol,
     direction: input.direction,
     maxResults,
   };
-  const packageRoot = options.packageRoot ?? DEFAULT_PACKAGE_ROOT;
-  const workerPath = getRoslynWorkerPath(packageRoot);
-  const runWorker = options.dependencies?.runWorker ?? defaultRunWorker;
   let rawResponse: unknown;
   try {
-    rawResponse = await runWorker(
-      request,
-      workerPath,
-      options.timeoutMs ?? 90_000,
-    );
+    rawResponse = await adapter.trace(request);
   } catch (error) {
+    const adapterError = adapterErrorDetails(error);
+    if (adapterError !== null) {
+      const code = adapterError.code === "unavailable"
+        ? "adapter_unavailable"
+        : adapterError.code === "symbol_not_found" || adapterError.code === "ambiguous_symbol"
+          ? adapterError.code
+          : adapterError.code === "invalid_request"
+            ? "invalid_request"
+            : "adapter_failed";
+      throw new GraphTraceError(
+        error instanceof Error ? error.message : String(error),
+        code,
+        adapterError.candidates,
+      );
+    }
     throw new GraphTraceError(
       error instanceof Error ? error.message : String(error),
-      "worker_unavailable",
+      "adapter_failed",
     );
   }
 
-  const parsed = workerResponseSchema.safeParse(rawResponse);
+  const parsed = adapterResponseSchema.safeParse(rawResponse);
   if (!parsed.success) {
     throw new GraphTraceError(
-      `Roslyn worker returned an invalid response: ${parsed.error.message}`,
-      "worker_protocol",
-    );
-  }
-  if (!parsed.data.ok) {
-    throw new GraphTraceError(
-      parsed.data.error.message,
-      workerFailureCode(parsed.data.error.code),
-      parsed.data.error.candidates,
+      `Trace adapter returned an invalid response: ${parsed.error.message}`,
+      "adapter_protocol",
     );
   }
   if (parsed.data.symbol !== symbol || parsed.data.direction !== input.direction) {
     throw new GraphTraceError(
-      "Roslyn worker response does not match the request",
-      "worker_protocol",
+      "Trace adapter response does not match the request",
+      "adapter_protocol",
     );
   }
 
@@ -531,28 +429,28 @@ export async function traceProject(
     const sourceFile = allowedFiles.get(key);
     if (sourceFile === undefined) {
       throw new GraphTraceError(
-        `Roslyn worker returned a source outside the allowed set: ${relativePath}`,
-        "worker_protocol",
+        `Trace adapter returned a source outside the allowed set: ${relativePath}`,
+        "adapter_protocol",
       );
     }
     current = await readIndexableFile(project.root, sourceFile);
     readCache.set(key, current);
     return current;
   };
-  const isFreshNode = async (node: GraphSymbolNode): Promise<boolean> => {
+  const isFreshNode = async (node: TraceSymbol): Promise<boolean> => {
     if (node.path === null) return true;
     const current = await readCurrent(node.path);
     if (current.kind !== "ok" || current.hash !== node.fileHash) return false;
     const lineCount = current.text.replace(/\r\n?/g, "\n").split("\n").length;
     if (node.lineEnd === null || node.lineEnd > lineCount) {
       throw new GraphTraceError(
-        "Roslyn worker returned symbol lines outside the current source",
-        "worker_protocol",
+        "Trace adapter returned symbol lines outside the current source",
+        "adapter_protocol",
       );
     }
     return true;
   };
-  const matchedSymbols: GraphSymbolNode[] = [];
+  const matchedSymbols: TraceSymbol[] = [];
   let staleSymbolsSkipped = 0;
   for (const rawNode of parsed.data.matchedSymbols) {
     const node = validateNode(rawNode, allowedFiles);
@@ -562,7 +460,7 @@ export async function traceProject(
     }
     matchedSymbols.push(node);
   }
-  const results: GraphTraceEdge[] = [];
+  const results: TraceAdapterEdge[] = [];
   let staleResultsSkipped = 0;
 
   for (const edge of parsed.data.results) {
@@ -585,8 +483,8 @@ export async function traceProject(
       edge.evidence.lineEnd > lines.length
     ) {
       throw new GraphTraceError(
-        "Roslyn worker returned evidence lines outside the current source",
-        "worker_protocol",
+        "Trace adapter returned evidence lines outside the current source",
+        "adapter_protocol",
       );
     }
     const excerptEnd = Math.min(edge.evidence.lineEnd, edge.evidence.lineStart + 19);
@@ -595,15 +493,19 @@ export async function traceProject(
       .join("\n")
       .trim()
       .slice(0, 2_000);
+    const { metadata: evidenceMetadata, ...evidence } = edge.evidence;
+    const { metadata, ...edgeBase } = edge;
     results.push({
-      relation: edge.relation,
+      ...edgeBase,
       from,
       to,
       evidence: {
-        ...edge.evidence,
+        ...evidence,
         path: evidencePath,
         text,
+        ...(evidenceMetadata === undefined ? {} : { metadata: evidenceMetadata }),
       },
+      ...(metadata === undefined ? {} : { metadata }),
     });
   }
 
@@ -619,7 +521,7 @@ export async function traceProject(
     staleResultsSkipped,
     staleSymbolsSkipped,
     matchedSymbols,
-    diagnostics: parsed.data.diagnostics,
+    diagnostics: normalizeDiagnostics(parsed.data.diagnostics),
     results,
     truncated: parsed.data.truncated,
   };

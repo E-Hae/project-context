@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { access, readFile, readdir, realpath, stat } from "node:fs/promises";
+import { readFile, readdir, realpath, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 import net from "node:net";
@@ -16,8 +16,11 @@ import {
   isCompatibleIndexState,
   loadProjectIndexState,
 } from "./index-state.js";
-import { getRoslynWorkerPath } from "./graph-client.js";
 import { MilvusRestClient } from "./milvus-rest-client.js";
+import {
+  discoverTraceAdapters,
+  type TraceAdapterDiscovery,
+} from "./trace-adapter-resolver.js";
 import { createVectorStore } from "./vector-store.js";
 
 export type CheckState =
@@ -32,6 +35,15 @@ export interface ComponentStatus {
   detail: string;
   version?: string;
   latencyMs?: number;
+  adapters?: TraceAdapterStatus[];
+}
+
+export interface TraceAdapterStatus {
+  name: string;
+  language: string;
+  state: "ready" | "missing" | "invalid";
+  detail: string;
+  version?: string;
 }
 
 export interface ProjectStatus {
@@ -56,7 +68,7 @@ export interface ProjectStatus {
     ripgrep: ComponentStatus;
     ollama: ComponentStatus;
     milvus: ComponentStatus;
-    roslyn: ComponentStatus;
+    trace: ComponentStatus;
     handoff: ComponentStatus;
   };
   index: {
@@ -90,6 +102,7 @@ export interface StatusDependencies {
   packageRoot: string;
   stateRoot: string;
   now: () => Date;
+  discoverTraceAdapters: () => Promise<TraceAdapterDiscovery>;
 }
 
 const moduleDirectory = path.dirname(fileURLToPath(import.meta.url));
@@ -172,6 +185,7 @@ const DEFAULT_DEPENDENCIES: StatusDependencies = {
   packageRoot: DEFAULT_PACKAGE_ROOT,
   stateRoot: DEFAULT_STATE_ROOT,
   now: () => new Date(),
+  discoverTraceAdapters,
 };
 
 function mergeDependencies(
@@ -294,27 +308,80 @@ async function checkMilvus(
   };
 }
 
-async function checkRoslyn(
-  deps: StatusDependencies,
-  timeoutMs: number,
-): Promise<ComponentStatus> {
-  const workerPath = getRoslynWorkerPath(deps.packageRoot);
+function isTraceAdapterProbeResult(
+  value: unknown,
+): value is { available: boolean; detail: string; version?: string } {
+  if (typeof value !== "object" || value === null) return false;
+  const probe = value as Record<string, unknown>;
+  return (
+    typeof probe.available === "boolean" &&
+    typeof probe.detail === "string" &&
+    (probe.version === undefined || typeof probe.version === "string")
+  );
+}
 
+async function checkTraceAdapters(deps: StatusDependencies): Promise<ComponentStatus> {
   try {
-    await access(workerPath);
-  } catch {
+    const discovery = await deps.discoverTraceAdapters();
+    const adapters = await Promise.all(discovery.adapters.map(async (adapter) => {
+      try {
+        const probe: unknown = await adapter.probe();
+        if (!isTraceAdapterProbeResult(probe)) {
+          return {
+            name: adapter.name,
+            language: adapter.language,
+            state: "missing",
+            detail: "Trace adapter probe returned an invalid response",
+          } satisfies TraceAdapterStatus;
+        }
+        return {
+          name: adapter.name,
+          language: adapter.language,
+          state: probe.available ? "ready" : "missing",
+          detail: probe.detail,
+          ...(probe.version === undefined ? {} : { version: probe.version }),
+        } satisfies TraceAdapterStatus;
+      } catch (error) {
+        return {
+          name: adapter.name,
+          language: adapter.language,
+          state: "invalid",
+          detail: error instanceof Error ? error.message : String(error),
+        } satisfies TraceAdapterStatus;
+      }
+    }));
+    const diagnostics = discovery.diagnostics.map((diagnostic) => ({
+      name: diagnostic.packageName,
+      language: "unknown",
+      state: "invalid" as const,
+      detail: diagnostic.detail,
+    }));
+    const details = [...adapters, ...diagnostics];
+    if (details.length === 0) {
+      return {
+        state: "ready",
+        detail: "No trace adapter is installed; graph tracing is optional",
+        adapters: [],
+      };
+    }
+    const state = details.some((adapter) => adapter.state === "invalid")
+      ? "invalid"
+      : details.some((adapter) => adapter.state === "missing")
+        ? "missing"
+        : "ready";
     return {
-      state: "not_built",
-      detail: "Roslyn worker has not been built yet",
+      state,
+      detail: state === "ready"
+        ? `${details.length} trace adapter${details.length === 1 ? "" : "s"} available`
+        : "Trace adapters are installed but unavailable or invalid",
+      adapters: details,
+    };
+  } catch (error) {
+    return {
+      state: "invalid",
+      detail: error instanceof Error ? error.message : String(error),
     };
   }
-
-  return checkCommand(
-    deps,
-    "dotnet",
-    [workerPath, "--version"],
-    Math.max(timeoutMs, 5_000),
-  );
 }
 
 function normalizePathForComparison(value: string): string {
@@ -403,7 +470,7 @@ function unavailableStatus(requestedPath: string, checkedAt: string): ProjectSta
       ripgrep: unavailable,
       ollama: unavailable,
       milvus: unavailable,
-      roslyn: unavailable,
+      trace: unavailable,
       handoff: unavailable,
     },
     index: {
@@ -501,7 +568,7 @@ export async function collectProjectStatus(
       };
 
   const usesMilvus = config.value.services.vectorStore.backend === "milvus";
-  const [ripgrep, ollama, milvus, roslyn, handoff] = await Promise.all([
+  const [ripgrep, ollama, milvus, trace, handoff] = await Promise.all([
     checkCommand(deps, "rg", ["--version"], timeoutMs),
     checkOllama(deps, config.value, timeoutMs),
     usesMilvus
@@ -510,7 +577,7 @@ export async function collectProjectStatus(
           state: "ready" as const,
           detail: "Local vector store is selected",
         }),
-    checkRoslyn(deps, timeoutMs),
+    checkTraceAdapters(deps),
     checkHandoff(deps, projectRoot, config.value),
   ]);
 
@@ -603,7 +670,6 @@ export async function collectProjectStatus(
   if (ripgrep.state !== "ready") missing.push("ripgrep");
   if (ollama.state !== "ready") missing.push("ollama");
   if (usesMilvus && milvus.state !== "ready") missing.push("milvus");
-  if (roslyn.state !== "ready") missing.push("roslyn");
   if (handoff.state !== "ready") missing.push("handoff");
   if (index.state === "not_initialized") missing.push("index:not_initialized");
   if (index.state === "stale") missing.push("index:stale");
@@ -638,7 +704,7 @@ export async function collectProjectStatus(
       ripgrep,
       ollama,
       milvus,
-      roslyn,
+      trace,
       handoff,
     },
     index,

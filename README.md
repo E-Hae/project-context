@@ -6,7 +6,7 @@
 
 `project-context` is an evidence-first local MCP server and CLI for navigating
 codebases. It performs deterministic status checks, exact and semantic search,
-bounded source reads, Roslyn-backed C# relationship tracing, and explicit
+bounded source reads, optional source-backed tracing adapters, and explicit
 handoff access.
 
 It is designed to keep source evidence local: the tool talks only to the local
@@ -19,7 +19,7 @@ line ranges so an agent or developer can verify the underlying code.
 | --- | --- |
 | Exact search | Fast, deterministic `rg` search with configured source and exclusion rules. |
 | Semantic search | Project-isolated embeddings in a persistent local vector store by default, validated against current file hashes. |
-| C# graph tracing | Roslyn-based callers, callees, inheritance, and implementation relationships. |
+| Graph tracing | Optional language adapters return source-backed callers, callees, inheritance, and implementation relationships. |
 | Bounded reads | Reads only configured project files and returns a limited source range. |
 | Handoffs | Lists, reads, creates, and updates explicit Markdown handoff documents safely. |
 
@@ -30,6 +30,12 @@ Install the CLI globally:
 ```sh
 npm install --global project-context-mcp
 project-context --help
+```
+
+To enable C# tracing, install the optional C# adapter alongside the core:
+
+```sh
+npm install --global project-context-mcp-csharp
 ```
 
 Then add a `.project-context.yml` file to the project you want to inspect and
@@ -70,15 +76,30 @@ The server exposes `context_status`, `context_search`, `context_read`,
 
 - Node.js 20 or newer
 - `rg` (ripgrep) for exact search
-- .NET 8 runtime for C# relationship tracing; the Roslyn worker is included in
-  the npm package
 - An Ollama embedding model configured for semantic search
 - An Ollama answer model for `ask`
+
+The core package runs status, exact search, semantic search, and `ask` without
+.NET or a language adapter. C# tracing additionally requires .NET 8 and the
+`project-context-mcp-csharp` adapter package.
 
 Semantic search requires an Ollama embedding model, but uses a persistent local
 vector store by default and does not require Milvus. Exact search, bounded
 reads, status checks, and handoff access do not require Ollama or Milvus.
 `context_trace` does not require either service.
+
+## Trace adapters
+
+`context_trace` and `project-context trace` use an installed trace adapter.
+The core discovers the built-in C# candidate and any comma-separated package
+names in `PROJECT_CONTEXT_TRACE_ADAPTERS`. It selects the single adapter whose
+source extensions match the project, or requires `language` when several match.
+It never scans `node_modules` or installs packages automatically.
+
+Without a compatible adapter, an explicit trace reports an installation hint.
+Automatic graph routing falls back to semantic search when tracing is unavailable
+or ambiguous. Pass an optional language after `max-results` to the CLI trace
+command, or the optional `language` field to `context_trace`.
 
 ## Project configuration
 
@@ -162,7 +183,7 @@ not need them.
 | `project-context index <project-root> [--rebuild]` | Create or incrementally update the semantic index. |
 | `project-context watch <project-root> [interval-ms]` | Keep an index current with filesystem events and safety scans. |
 | `project-context search <project-root> <query> [mode] [scope] [max-results]` | Search in `auto`, `exact`, `graph`, or `semantic` mode. |
-| `project-context trace <project-root> <symbol> <direction> [max-results]` | Trace C# `callers`, `callees`, `inherits`, or `implements`. |
+| `project-context trace <project-root> <symbol> <direction> [max-results] [language]` | Trace relationships with an installed language adapter. |
 | `project-context read <project-root> <path> [start-line] [end-line]` | Read an allowed, bounded file range. |
 | `project-context ask <project-root> <question>` | Produce a local, source-cited development answer. |
 | `project-context handoff save|update ...` | Create or update explicit handoff Markdown. |
@@ -175,15 +196,25 @@ git clone https://github.com/E-Hae/project-context.git
 cd project-context
 npm ci
 npm run verify
+npm --workspace adapters/csharp run verify
 npm pack --dry-run
 ```
 
-`npm run verify` runs type checking, the full TypeScript suite, and the Roslyn
-integration test. The package includes the built CLI and Roslyn worker; it does
-not publish test fixtures, local evaluation data, or installed dependencies.
+`npm run verify` verifies the language-neutral core without .NET. The C# adapter
+builds and verifies its Roslyn worker separately. The core tarball includes
+JavaScript dependency notices but excludes workers and Microsoft binaries; the
+C# adapter tarball includes its worker and Microsoft third-party notices.
+
+## Migration from 0.3.x
+
+Upgrade the core to `project-context-mcp@1.0.0`. If you used C# tracing in
+0.3.x, install `project-context-mcp-csharp@1.0.0` and ensure .NET 8 is
+available. No project configuration change is required for the existing C#
+trace command. Core-only installations remain fully supported; only graph
+tracing becomes optional.
 
 ## License
 
-Project Context MCP is [MIT licensed](LICENSE). See
-[third-party notices](THIRD_PARTY_NOTICES.md) for bundled-worker and dependency
-license details.
+Project Context MCP is [MIT licensed](LICENSE). Core JavaScript dependency
+notices are in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md); the optional
+C# adapter carries the notices for its bundled Microsoft worker dependencies.

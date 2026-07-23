@@ -22,7 +22,7 @@ function printUsage(stream: NodeJS.WriteStream = process.stderr): void {
       "  project-context status [project-root]",
       "  project-context ask <project-root> <question>",
       "  project-context search <project-root> <query> [auto|exact|graph|semantic] [all|code|documents] [max-results]",
-      "  project-context trace <project-root> <symbol> <callers|callees|inherits|implements> [max-results]",
+      "  project-context trace <project-root> <symbol> <callers|callees|inherits|implements> [max-results] [language]",
       "  project-context read <project-root> <path> [start-line] [end-line]",
       "  project-context handoff save <project-root> <label> (--file <markdown-file> | --stdin)",
       "  project-context handoff update <project-root> <label> (--file <markdown-file> | --stdin) [--append]",
@@ -270,8 +270,8 @@ async function main(args: string[]): Promise<number> {
     return 0;
   }
 
-  if (command === "trace" && rest.length >= 3 && rest.length <= 4) {
-    const [projectPath, symbol, directionValue, maxResultsValue] = rest;
+  if (command === "trace" && rest.length >= 3 && rest.length <= 5) {
+    const [projectPath, symbol, directionValue, maxResultsValue, language] = rest;
     if (
       directionValue !== "callers" &&
       directionValue !== "callees" &&
@@ -286,6 +286,7 @@ async function main(args: string[]): Promise<number> {
       symbol: symbol!,
       direction: directionValue as TraceDirection,
       maxResults,
+      ...(language === undefined ? {} : { language }),
     });
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
     return 0;

@@ -13,7 +13,6 @@ import {
   collectProjectStatus,
   type StatusDependencies,
 } from "../src/status.js";
-import { getRoslynWorkerPath } from "../src/graph-client.js";
 import { LocalVectorStore } from "../src/local-vector-store.js";
 
 test("collectProjectStatus returns unavailable for a missing project", async () => {
@@ -26,7 +25,7 @@ test("collectProjectStatus returns unavailable for a missing project", async () 
   assert.deepEqual(status.missing, ["project"]);
 });
 
-test("collectProjectStatus reports ready local probes and an unbuilt Roslyn worker", async () => {
+test("collectProjectStatus does not degrade when no trace adapter is installed", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "project-context-status-"));
   const handoffRoot = path.join(root, "handoff");
   const packageRoot = path.join(root, "package");
@@ -123,19 +122,25 @@ test("collectProjectStatus reports ready local probes and an unbuilt Roslyn work
         packageRoot,
         stateRoot,
         now: () => new Date("2026-07-14T00:00:00.000Z"),
+        discoverTraceAdapters: async () => ({
+          candidates: ["project-context-mcp-csharp"],
+          adapters: [],
+          diagnostics: [],
+        }),
       },
     });
 
-    assert.equal(status.status, "degraded");
+    assert.equal(status.status, "ready");
     assert.equal(status.components.git.state, "ready");
     assert.equal(status.components.ripgrep.state, "ready");
     assert.equal(status.components.ollama.state, "ready");
     assert.equal(status.components.milvus.state, "ready");
     assert.equal(status.components.handoff.state, "ready");
-    assert.equal(status.components.roslyn.state, "not_built");
+    assert.equal(status.components.trace.state, "ready");
+    assert.deepEqual(status.components.trace.adapters, []);
     assert.equal(status.index.state, "ready");
     assert.equal(status.index.stale, false);
-    assert.deepEqual(status.missing, ["roslyn"]);
+    assert.deepEqual(status.missing, []);
 
     collectionLoadState = "LoadStateLoading";
     collectionLoadProgress = 0;
@@ -154,7 +159,7 @@ test("collectProjectStatus reports ready local probes and an unbuilt Roslyn work
     assert.deepEqual(recoveringStatus.index.errors, [
       "Milvus index collection is not loaded (LoadStateLoading, 0%)",
     ]);
-    assert.deepEqual(recoveringStatus.missing, ["roslyn", "index:invalid"]);
+    assert.deepEqual(recoveringStatus.missing, ["index:invalid"]);
 
     collectionLoadState = "LoadStateLoaded";
     collectionLoadProgress = 100;
@@ -173,7 +178,7 @@ test("collectProjectStatus reports ready local probes and an unbuilt Roslyn work
     assert.equal(staleStatus.status, "degraded");
     assert.equal(staleStatus.index.state, "stale");
     assert.equal(staleStatus.index.stale, true);
-    assert.deepEqual(staleStatus.missing, ["roslyn", "index:stale"]);
+    assert.deepEqual(staleStatus.missing, ["index:stale"]);
 
     const failedTcpStatus = await collectProjectStatus(root, {
       dependencies: {
@@ -189,6 +194,44 @@ test("collectProjectStatus reports ready local probes and an unbuilt Roslyn work
 
     assert.equal(failedTcpStatus.components.milvus.state, "unreachable");
     assert.match(failedTcpStatus.components.milvus.detail, /DNS lookup failed/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("collectProjectStatus reports a malformed trace probe as unavailable", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "project-context-status-"));
+  try {
+    await writeFile(path.join(root, PROJECT_CONFIG_FILENAME), "version: 1\n", "utf8");
+    const status = await collectProjectStatus(root, {
+      dependencies: {
+        runCommand: async (command, args) => {
+          if (command === "git" && args.at(-1) === "--show-toplevel") {
+            return { ok: true, stdout: root, stderr: "" };
+          }
+          if (command === "git") return { ok: true, stdout: "0123456789abcdef", stderr: "" };
+          if (command === "rg") return { ok: true, stdout: "ripgrep 14.1.1", stderr: "" };
+          return { ok: false, stdout: "", stderr: "not found", error: "not found" };
+        },
+        fetch: async () => Response.json({ models: [{ name: "nomic-embed-text:v1.5" }] }),
+        discoverTraceAdapters: async () => ({
+          candidates: ["malformed-adapter"],
+          adapters: [{
+            name: "malformed-adapter",
+            language: "fixture",
+            sourceFileExtensions: [".fixture"],
+            probe: async () => ({ available: "yes", detail: 1, version: 2 } as never),
+            trace: async () => { throw new Error("not used"); },
+          }],
+          diagnostics: [],
+        }),
+        stateRoot: path.join(root, "state"),
+      },
+    });
+    assert.equal(status.components.trace.state, "missing");
+    assert.equal(status.components.trace.adapters?.[0]?.state, "missing");
+    assert.match(status.components.trace.adapters?.[0]?.detail ?? "", /invalid response/);
+    assert.equal(status.missing.includes("trace_adapter"), false);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -311,10 +354,6 @@ test("collectProjectStatus degrades when Git metadata is unavailable", async () 
       root,
       "utf8",
     );
-    const workerPath = getRoslynWorkerPath(packageRoot);
-    await mkdir(path.dirname(workerPath), { recursive: true });
-    await writeFile(workerPath, "fixture worker\n", "utf8");
-
     const status = await collectProjectStatus(root, {
       dependencies: {
         runCommand: async (command) => {
