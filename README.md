@@ -81,21 +81,29 @@ Ollama or Milvus. `context_trace` does not require either service.
 
 ## Project configuration
 
-Create `.project-context.yml` in the target project root:
+Configuration is optional. Create `.project-context.yml` in the target project
+root when you want to narrow the indexed sources or add project-specific
+exclusions. The example below contains only project-owned paths; it does not
+include a user home directory, account, token, or machine-specific setting.
 
 ```yaml
 version: 1
 sources:
   code: [src]
   documents: [README.md, docs]
-  handoff:
-    enabled: true
-    projectSlug: example-project
 exclude:
   - node_modules/**
   - .git/**
   - "**/*.dll"
   - "**/*.keystore"
+```
+
+### Optional semantic search services
+
+Add this section only when Ollama and Milvus run locally or at endpoints you
+control. Omit it to use the documented local defaults.
+
+```yaml
 services:
   ollama:
     url: http://127.0.0.1:11434
@@ -106,6 +114,19 @@ services:
     address: 127.0.0.1:19530
 ```
 
+### Optional handoff documents
+
+Handoff documents are disabled by default because they live in user-level
+storage. Enable them only when you want this project to index its own handoff
+documents, and choose a project slug that is unique on your machine:
+
+```yaml
+sources:
+  handoff:
+    enabled: true
+    projectSlug: example-project
+```
+
 Add every credential-bearing, generated, or third-party path to `exclude`
 before indexing. The same policy is enforced by exact search, reads, indexing,
 semantic evidence, and C# tracing. The indexer never writes project source
@@ -113,7 +134,8 @@ files.
 
 `PROJECT_CONTEXT_MILVUS_TOKEN` enables authenticated Milvus access.
 `PROJECT_CONTEXT_STATE_ROOT` and `PROJECT_CONTEXT_HANDOFF_ROOT` redirect local
-state and handoff storage for tests or automation.
+state and handoff storage for tests or automation; typical installations do
+not need them.
 
 ## CLI reference
 

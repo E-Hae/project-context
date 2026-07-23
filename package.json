@@ -1,6 +1,6 @@
 {
   "name": "project-context-mcp",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "license": "MIT",
   "type": "module",
   "description": "Evidence-first local MCP server and CLI for codebase discovery, search, and C# relationship tracing.",

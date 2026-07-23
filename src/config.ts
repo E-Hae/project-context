@@ -49,7 +49,7 @@ export const DEFAULT_CONFIG: ProjectContextConfig = {
     code: ["."],
     documents: ["README.md", "docs"],
     handoff: {
-      enabled: true,
+      enabled: false,
       projectSlug: null,
     },
   },

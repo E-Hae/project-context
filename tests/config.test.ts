@@ -18,6 +18,7 @@ test("loadProjectConfig returns defaults when the file is missing", async () => 
     assert.equal(loaded.exists, false);
     assert.equal(loaded.valid, true);
     assert.deepEqual(loaded.value, DEFAULT_CONFIG);
+    assert.equal(loaded.value.sources.handoff.enabled, false);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

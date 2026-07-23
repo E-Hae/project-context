@@ -38,6 +38,7 @@ test("collectProjectStatus reports ready local probes and an unbuilt Roslyn work
         "version: 1",
         "sources:",
         "  handoff:",
+        "    enabled: true",
         "    projectSlug: FIXTURE",
         "services:",
         "  ollama:",
@@ -234,6 +235,8 @@ test("collectProjectStatus degrades when Git metadata is unavailable", async () 
     assert.equal(status.status, "degraded");
     assert.equal(status.project.gitCommit, null);
     assert.equal(status.components.git.state, "missing");
+    assert.equal(status.components.handoff.state, "ready");
+    assert.match(status.components.handoff.detail, /disabled/i);
     assert.deepEqual(status.missing, ["git", "index:not_initialized"]);
   } finally {
     await rm(root, { recursive: true, force: true });

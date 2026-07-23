@@ -327,7 +327,7 @@ async function checkHandoff(
 ): Promise<ComponentStatus> {
   if (!config.sources.handoff.enabled) {
     return {
-      state: "missing",
+      state: "ready",
       detail: "Handoff indexing is disabled in project configuration",
     };
   }
