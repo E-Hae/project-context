@@ -1,55 +1,87 @@
----
-title: Project Context MCP
-date: 2026-07-16
-tags: [mcp, rag, code-search]
----
-
 # Project Context MCP
 
-`project-context` is a local MCP server and CLI for deterministic project
-checks, exact search, semantic search, bounded source reads, Roslyn-backed C#
-relationship tracing, and explicit handoff access.
+[![npm version](https://img.shields.io/npm/v/project-context-mcp.svg)](https://www.npmjs.com/package/project-context-mcp)
+[![license](https://img.shields.io/npm/l/project-context-mcp.svg)](LICENSE)
+[![Node.js 20+](https://img.shields.io/badge/node-%3E%3D20-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
 
-It includes MCP tools for status, search, reads, relationship tracing, and
-handoffs. The CLI can incrementally index configured project code and documents
-into a local Milvus collection. `project-context ask` retrieves source evidence,
-asks a local Ollama model for a grounded answer, and prints the supporting file
-and line ranges.
+`project-context` is an evidence-first local MCP server and CLI for navigating
+codebases. It performs deterministic status checks, exact and semantic search,
+bounded source reads, Roslyn-backed C# relationship tracing, and explicit
+handoff access.
+
+It is designed to keep source evidence local: the tool talks only to the local
+or self-hosted services you configure. Search results include source paths and
+line ranges so an agent or developer can verify the underlying code.
+
+## Features
+
+| Capability | What it does |
+| --- | --- |
+| Exact search | Fast, deterministic `rg` search with configured source and exclusion rules. |
+| Semantic search | Project-isolated embeddings in Milvus, validated against current file hashes. |
+| C# graph tracing | Roslyn-based callers, callees, inheritance, and implementation relationships. |
+| Bounded reads | Reads only configured project files and returns a limited source range. |
+| Handoffs | Lists, reads, creates, and updates explicit Markdown handoff documents safely. |
+
+## Quick start
+
+Install the CLI globally:
+
+```sh
+npm install --global project-context-mcp
+project-context --help
+```
+
+Then add a `.project-context.yml` file to the project you want to inspect and
+run a status check:
+
+```sh
+project-context status /path/to/project
+project-context index /path/to/project
+project-context search /path/to/project "session restore" auto code 10
+```
+
+On Windows, quote paths that contain spaces:
+
+```powershell
+project-context status 'C:\work\my project'
+```
+
+### Connect an MCP client
+
+Add this standard MCP server entry to your client's configuration:
+
+```json
+{
+  "mcpServers": {
+    "project-context": {
+      "command": "project-context",
+      "args": ["serve", "--mcp"]
+    }
+  }
+}
+```
+
+The server exposes `context_status`, `context_search`, `context_read`,
+`context_trace`, and the `context_handoff_*` tools. Start with
+`context_status` to confirm the selected project and local dependencies.
 
 ## Requirements
 
 - Node.js 20 or newer
-- .NET 8 or newer for C# graph tracing
-- `rg`
-- For semantic search: Ollama with `nomic-embed-text:v1.5` and a REST
-  v2-compatible Milvus instance
-- For `ask`: a local Ollama answer model (default: `qwen3.5:9b`)
+- `rg` (ripgrep) for exact search
+- .NET 8 runtime for C# relationship tracing; the Roslyn worker is included in
+  the npm package
+- Ollama with `nomic-embed-text:v1.5` and a REST v2-compatible Milvus instance
+  for semantic search
+- A local Ollama answer model for `ask` (default: `qwen3.5:9b`)
 
-## Install and run
-
-```powershell
-npm install
-npm run build
-npm run build:roslyn
-node dist/src/cli.js status C:\path\to\project
-node dist/src/cli.js index C:\path\to\project
-node dist/src/cli.js search C:\path\to\project "Loader.CreateLoadingState callers" graph code 50
-node dist/src/cli.js trace C:\path\to\project Loader.CreateLoadingState callees 50
-node dist/src/cli.js read C:\path\to\project Assets/Scripts/File.cs 1 200
-node dist/src/cli.js ask C:\path\to\project "Where is session restore handled?"
-node dist/src/cli.js serve --mcp
-```
-
-For a full build and test run:
-
-```powershell
-npm test
-npm run test:roslyn
-```
+Exact search, bounded reads, status checks, and handoff access do not require
+Ollama or Milvus. `context_trace` does not require either service.
 
 ## Project configuration
 
-Place `.project-context.yml` at the project root.
+Create `.project-context.yml` in the target project root:
 
 ```yaml
 version: 1
@@ -61,7 +93,9 @@ sources:
     projectSlug: example-project
 exclude:
   - node_modules/**
+  - .git/**
   - "**/*.dll"
+  - "**/*.keystore"
 services:
   ollama:
     url: http://127.0.0.1:11434
@@ -72,39 +106,45 @@ services:
     address: 127.0.0.1:19530
 ```
 
-Add every secret-bearing or generated path to `exclude` before indexing. The
-same source policy is applied to exact search, bounded reads, indexing,
-semantic evidence, and Roslyn graph tracing. Excluded content is not used as
-evidence. Set `PROJECT_CONTEXT_MILVUS_TOKEN` only when Milvus authentication is
-enabled.
+Add every credential-bearing, generated, or third-party path to `exclude`
+before indexing. The same policy is enforced by exact search, reads, indexing,
+semantic evidence, and C# tracing. The indexer never writes project source
+files.
 
-`PROJECT_CONTEXT_STATE_ROOT` can redirect index state, and
-`PROJECT_CONTEXT_HANDOFF_ROOT` can redirect handoff storage for isolated tests
-or automation. The indexer never writes files in the indexed project.
+`PROJECT_CONTEXT_MILVUS_TOKEN` enables authenticated Milvus access.
+`PROJECT_CONTEXT_STATE_ROOT` and `PROJECT_CONTEXT_HANDOFF_ROOT` redirect local
+state and handoff storage for tests or automation.
 
-## Behavior
+## CLI reference
 
-`context_status` reports project configuration, `rg`, Ollama, Milvus, Roslyn
-worker, handoff registration, and index freshness. It returns `ready`,
-`degraded`, or `unavailable` with deterministic diagnostics.
+| Command | Purpose |
+| --- | --- |
+| `project-context status [project-root]` | Check configuration, dependencies, and index freshness. |
+| `project-context index <project-root> [--rebuild]` | Create or incrementally update the semantic index. |
+| `project-context watch <project-root> [interval-ms]` | Keep an index current with filesystem events and safety scans. |
+| `project-context search <project-root> <query> [mode] [scope] [max-results]` | Search in `auto`, `exact`, `graph`, or `semantic` mode. |
+| `project-context trace <project-root> <symbol> <direction> [max-results]` | Trace C# `callers`, `callees`, `inherits`, or `implements`. |
+| `project-context read <project-root> <path> [start-line] [end-line]` | Read an allowed, bounded file range. |
+| `project-context ask <project-root> <question>` | Produce a local, source-cited development answer. |
+| `project-context handoff save|update ...` | Create or update explicit handoff Markdown. |
+| `project-context serve --mcp` | Start the stdio MCP server. |
 
-Exact search uses `rg --json --fixed-strings`. Semantic search stores
-project-isolated vectors, validates source hashes before returning a result, and
-returns at most one best chunk per file. `context_read` resolves paths before
-reading, rejects project-root escapes and disallowed files, and returns at most
-400 lines.
+## Development
 
-`context_trace` uses a local Roslyn worker for C# `callers`, `callees`,
-`inherits`, and `implements` relationships. It only returns edges resolved by
-the semantic model; ambiguity and unresolved calls are reported instead of
-guessed.
+```sh
+git clone https://github.com/E-Hae/project-context.git
+cd project-context
+npm ci
+npm run verify
+npm pack --dry-run
+```
 
-`context_handoff_save` only creates a new complete Markdown document, while
-`context_handoff_update` explicitly replaces or appends to one. Both use
-temporary files, preserving the original document date on replacement and
-avoiding partial reads.
+`npm run verify` runs type checking, the full TypeScript suite, and the Roslyn
+integration test. The package includes the built CLI and Roslyn worker; it does
+not publish test fixtures, local evaluation data, or installed dependencies.
 
 ## License
 
-The project source is [MIT licensed](LICENSE). See
-[third-party notices](THIRD_PARTY_NOTICES.md) for dependency licenses.
+Project Context MCP is [MIT licensed](LICENSE). See
+[third-party notices](THIRD_PARTY_NOTICES.md) for bundled-worker and dependency
+license details.

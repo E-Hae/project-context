@@ -100,6 +100,13 @@ async function startOllamaStub(): Promise<{
   };
 }
 
+test("CLI prints help successfully", async () => {
+  const result = await runCli(["--help"], tmpdir());
+
+  assert.match(result.stdout, /project-context search/);
+  assert.equal(result.stderr, "");
+});
+
 test("CLI saves and appends handoffs without an MCP client", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "project-context-cli-"));
   const projectRoot = path.join(root, "AutomationProject");

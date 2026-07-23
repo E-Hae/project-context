@@ -13,8 +13,8 @@ import { serveMcp } from "./mcp-server.js";
 import { collectProjectStatus } from "./status.js";
 import { watchProject } from "./watcher.js";
 
-function printUsage(): void {
-  process.stderr.write(
+function printUsage(stream: NodeJS.WriteStream = process.stderr): void {
+  stream.write(
     [
       "Usage:",
       "  project-context index <project-root> [--rebuild]",
@@ -92,6 +92,11 @@ function handoffOptions(): { handoffRoot?: string } {
 
 async function main(args: string[]): Promise<number> {
   const [command, ...rest] = args;
+
+  if ((command === "--help" || command === "-h") && rest.length === 0) {
+    printUsage(process.stdout);
+    return 0;
+  }
 
   if (command === "status") {
     const projectRoot = rest[0] ?? process.cwd();
