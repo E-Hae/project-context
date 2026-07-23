@@ -1,0 +1,8 @@
+node_modules/
+dist/
+coverage/
+workers/roslyn/bin/
+workers/roslyn/obj/
+
+# Local evaluation inputs and results can identify private target projects.
+eval/

@@ -1,0 +1,314 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+
+import { GraphTraceError, type GraphTraceResult } from "../src/graph-client.js";
+import {
+  decideSearchRoute,
+  extractGraphDirection,
+  extractGraphSymbol,
+  HybridSearchError,
+  searchProject,
+} from "../src/hybrid-search.js";
+import type {
+  ExactSearchResult,
+  SemanticSearchResult,
+} from "../src/result-format.js";
+
+function exactResult(withEvidence: boolean): ExactSearchResult {
+  return {
+    route: "exact",
+    fallbackUsed: false,
+    query: "query",
+    scope: "all",
+    commit: null,
+    indexedAt: null,
+    results: withEvidence
+      ? [
+          {
+            source: "code",
+            path: "src/Feature.cs",
+            matchKind: "content",
+            lineStart: 1,
+            lineEnd: 1,
+            text: "Feature",
+            score: null,
+            indexedAt: null,
+            commit: null,
+          },
+        ]
+      : [],
+    truncated: false,
+  };
+}
+
+function semanticResult(): SemanticSearchResult {
+  return {
+    route: "semantic",
+    fallbackUsed: false,
+    query: "query",
+    scope: "all",
+    commit: null,
+    indexCommit: null,
+    indexedAt: "2026-07-14T00:00:00.000Z",
+    stale: false,
+    queryExpansion: {
+      used: false,
+      model: null,
+      expandedQuery: null,
+      identifierQuery: null,
+      error: null,
+    },
+    staleResultsSkipped: 0,
+    results: [],
+    truncated: false,
+  };
+}
+
+function graphResult(withEdge: boolean): GraphTraceResult {
+  return {
+    route: "graph",
+    fallbackUsed: false,
+    symbol: "Feature.Target",
+    direction: "callers",
+    commit: null,
+    analyzedAt: "2026-07-14T00:00:00.000Z",
+    workerVersion: "fixture-worker/1.0",
+    stale: false,
+    staleResultsSkipped: 0,
+    staleSymbolsSkipped: 0,
+    matchedSymbols: [],
+    diagnostics: {
+      filesRequested: 1,
+      filesLoaded: 1,
+      filesSkipped: 0,
+      metadataFailures: 0,
+      projectFilesRead: 0,
+      assemblyDefinitionsLoaded: 0,
+      referencesLoaded: 1,
+      referenceFailures: 0,
+      parseErrors: 0,
+      unresolvedCandidates: 0,
+      partial: false,
+      elapsedMs: 1,
+      messages: [],
+    },
+    results: withEdge
+      ? [
+          {
+            relation: "calls",
+            from: {
+              name: "Caller",
+              fullName: "Caller.Invoke",
+              signature: "Caller.Invoke()",
+              kind: "method",
+              assembly: "Fixture",
+              path: "src/Caller.cs",
+              lineStart: 1,
+              lineEnd: 1,
+              fileHash: "a".repeat(64),
+              unityMessage: false,
+            },
+            to: {
+              name: "Target",
+              fullName: "Feature.Target",
+              signature: "Feature.Target()",
+              kind: "method",
+              assembly: "Fixture",
+              path: "src/Feature.cs",
+              lineStart: 1,
+              lineEnd: 1,
+              fileHash: "b".repeat(64),
+              unityMessage: false,
+            },
+            evidence: {
+              path: "src/Caller.cs",
+              lineStart: 1,
+              lineEnd: 1,
+              text: "Target();",
+              fileHash: "a".repeat(64),
+            },
+          },
+        ]
+      : [],
+    truncated: false,
+  };
+}
+
+test("auto routing separates exact, graph, and semantic questions", () => {
+  assert.equal(decideSearchRoute("Loader.CreateLoadingState", "all").route, "exact");
+  assert.equal(decideSearchRoute("Assets/Scripts/Loader.cs", "all").route, "exact");
+  assert.equal(decideSearchRoute("CS0123 오류", "all").route, "exact");
+  assert.deepEqual(
+    decideSearchRoute("QuestManager.MoveToQuestPosition의 호출자는?", "all"),
+    {
+      route: "graph",
+      symbol: "QuestManager.MoveToQuestPosition",
+      direction: "callers",
+    },
+  );
+  assert.equal(
+    decideSearchRoute("Loader.CreateLoadingState가 생성하는 타입", "all").route,
+    "graph",
+  );
+  assert.equal(
+    decideSearchRoute("게임 시작 로딩 흐름은 어디에 있나?", "all").route,
+    "semantic",
+  );
+  assert.equal(
+    decideSearchRoute("TargetHpUI 호출 관계", "documents").route,
+    "semantic",
+  );
+  assert.equal(decideSearchRoute("호출 관계를 보여줘", "all").route, "semantic");
+  assert.equal(extractGraphSymbol("Feature.Overload(int) 호출자"), "Feature.Overload(int)");
+  assert.equal(extractGraphSymbol("Overload(int) 호출자"), "Overload(int)");
+  assert.equal(extractGraphSymbol("process(int) callers"), "process(int)");
+  assert.equal(extractGraphSymbol("Caller.Submit() 호출자"), "Caller.Submit()");
+  assert.equal(extractGraphSymbol("CALLER of Target"), "Target");
+  assert.equal(extractGraphDirection("IFeature 구현 타입"), "implements");
+});
+
+test("explicit search modes are honored without fallback", async () => {
+  let semanticCalls = 0;
+  const dependencies = {
+    searchExact: async () => exactResult(false),
+    searchSemantic: async () => {
+      semanticCalls += 1;
+      return semanticResult();
+    },
+    traceProject: async () => graphResult(false),
+  };
+
+  const exact = await searchProject(
+    { projectPath: ".", query: "MissingIdentifier", mode: "exact" },
+    { dependencies },
+  );
+  assert.equal(exact.route, "exact");
+  assert.equal(semanticCalls, 0);
+
+  const graph = await searchProject(
+    { projectPath: ".", query: "Feature.Target 호출자", mode: "graph" },
+    { dependencies },
+  );
+  assert.equal(graph.route, "graph");
+  assert.equal(semanticCalls, 0);
+
+  const semantic = await searchProject(
+    { projectPath: ".", query: "intent", mode: "semantic" },
+    { dependencies },
+  );
+  assert.equal(semantic.route, "semantic");
+  assert.equal(semanticCalls, 1);
+});
+
+test("auto mode falls back once only for an empty exact or graph route", async () => {
+  let exactHasEvidence = false;
+  let graphHasEdge = false;
+  let semanticCalls = 0;
+  const dependencies = {
+    searchExact: async () => exactResult(exactHasEvidence),
+    searchSemantic: async () => {
+      semanticCalls += 1;
+      return semanticResult();
+    },
+    traceProject: async () => graphResult(graphHasEdge),
+  };
+
+  const exactFallback = await searchProject(
+    { projectPath: ".", query: "MissingIdentifier", mode: "auto" },
+    { dependencies },
+  );
+  assert.equal(exactFallback.route, "semantic");
+  assert.equal(exactFallback.fallbackUsed, true);
+
+  exactHasEvidence = true;
+  const exact = await searchProject(
+    { projectPath: ".", query: "KnownIdentifier", mode: "auto" },
+    { dependencies },
+  );
+  assert.equal(exact.route, "exact");
+  assert.equal(exact.fallbackUsed, false);
+
+  const graphFallback = await searchProject(
+    { projectPath: ".", query: "Feature.Target 호출자", mode: "auto" },
+    { dependencies },
+  );
+  assert.equal(graphFallback.route, "semantic");
+  assert.equal(graphFallback.fallbackUsed, true);
+
+  graphHasEdge = true;
+  const graph = await searchProject(
+    { projectPath: ".", query: "Feature.Target 호출자", mode: "auto" },
+    { dependencies },
+  );
+  assert.equal(graph.route, "graph");
+  assert.equal(semanticCalls, 2);
+});
+
+test("auto mode only treats graph symbol-not-found as an empty route", async () => {
+  const baseDependencies = {
+    searchExact: async () => exactResult(false),
+    searchSemantic: async () => semanticResult(),
+  };
+  const fallback = await searchProject(
+    { projectPath: ".", query: "Missing.Target 호출자", mode: "auto" },
+    {
+      dependencies: {
+        ...baseDependencies,
+        traceProject: async () => {
+          throw new GraphTraceError("not found", "symbol_not_found");
+        },
+      },
+    },
+  );
+  assert.equal(fallback.route, "semantic");
+  assert.equal(fallback.fallbackUsed, true);
+
+  await assert.rejects(
+    searchProject(
+      { projectPath: ".", query: "Feature.Target 호출자", mode: "auto" },
+      {
+        dependencies: {
+          ...baseDependencies,
+          traceProject: async () => {
+            throw new GraphTraceError("offline", "worker_unavailable");
+          },
+        },
+      },
+    ),
+    (error: unknown) =>
+      error instanceof GraphTraceError && error.code === "worker_unavailable",
+  );
+
+  await assert.rejects(
+    searchProject(
+      { projectPath: ".", query: "호출 관계", mode: "graph" },
+      {
+        dependencies: {
+          ...baseDependencies,
+          traceProject: async () => graphResult(false),
+        },
+      },
+    ),
+    (error: unknown) =>
+      error instanceof HybridSearchError && error.code === "invalid_graph_query",
+  );
+
+  await assert.rejects(
+    searchProject(
+      {
+        projectPath: ".",
+        query: "Feature",
+        mode: "auto",
+        maxResults: 1.5,
+      },
+      {
+        dependencies: {
+          ...baseDependencies,
+          traceProject: async () => graphResult(false),
+        },
+      },
+    ),
+    (error: unknown) =>
+      error instanceof HybridSearchError && error.code === "invalid_request",
+  );
+});
