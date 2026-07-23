@@ -72,9 +72,9 @@ The server exposes `context_status`, `context_search`, `context_read`,
 - `rg` (ripgrep) for exact search
 - .NET 8 runtime for C# relationship tracing; the Roslyn worker is included in
   the npm package
-- Ollama with `nomic-embed-text:v1.5` and a REST v2-compatible Milvus instance
-  for semantic search
-- A local Ollama answer model for `ask` (default: `qwen3.5:9b`)
+- An Ollama embedding model and a REST v2-compatible Milvus instance for
+  semantic search
+- An Ollama answer model for `ask`
 
 Exact search, bounded reads, status checks, and handoff access do not require
 Ollama or Milvus. `context_trace` does not require either service.
@@ -100,18 +100,19 @@ exclude:
 
 ### Optional semantic search services
 
-Add this section only when Ollama and Milvus run locally or at endpoints you
-control. Omit it to use the documented local defaults.
+Add this section only when you want semantic search or `ask`. Replace every
+example endpoint and model name with services and models you operate; these are
+placeholders, not bundled defaults.
 
 ```yaml
 services:
   ollama:
-    url: http://127.0.0.1:11434
-    embeddingModel: nomic-embed-text:v1.5
-    answerModel: qwen3.5:9b
-    queryExpansionModel: qwen3.5:9b
+    url: http://ollama.example:11434
+    embeddingModel: your-embedding-model
+    answerModel: your-answer-model
+    queryExpansionModel: null
   milvus:
-    address: 127.0.0.1:19530
+    address: milvus.example:19530
 ```
 
 ### Optional handoff documents
