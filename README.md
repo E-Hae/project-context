@@ -1,7 +1,7 @@
 # Project Context MCP
 
 [![npm version](https://img.shields.io/npm/v/project-context-mcp.svg)](https://www.npmjs.com/package/project-context-mcp)
-[![license](https://img.shields.io/npm/l/project-context-mcp.svg)](LICENSE)
+[![license](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Node.js 20+](https://img.shields.io/badge/node-%3E%3D20-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
 
 `project-context` is an evidence-first local MCP server and CLI for navigating
