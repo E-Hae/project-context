@@ -18,6 +18,7 @@ import {
 } from "./index-state.js";
 import { getRoslynWorkerPath } from "./graph-client.js";
 import { MilvusRestClient } from "./milvus-rest-client.js";
+import { createVectorStore } from "./vector-store.js";
 
 export type CheckState =
   | "ready"
@@ -499,10 +500,16 @@ export async function collectProjectStatus(
           "Git repository or HEAD commit is unavailable",
       };
 
+  const usesMilvus = config.value.services.vectorStore.backend === "milvus";
   const [ripgrep, ollama, milvus, roslyn, handoff] = await Promise.all([
     checkCommand(deps, "rg", ["--version"], timeoutMs),
     checkOllama(deps, config.value, timeoutMs),
-    checkMilvus(deps, config.value, timeoutMs),
+    usesMilvus
+      ? checkMilvus(deps, config.value, timeoutMs)
+      : Promise.resolve({
+          state: "ready" as const,
+          detail: "Local vector store is selected",
+        }),
     checkRoslyn(deps, timeoutMs),
     checkHandoff(deps, projectRoot, config.value),
   ]);
@@ -546,21 +553,23 @@ export async function collectProjectStatus(
             errors: [],
           };
         })();
-  if (index.state === "ready" && milvus.state === "ready") {
+  if (index.state === "ready" && (!usesMilvus || milvus.state === "ready")) {
     try {
-      const vectorStore = new MilvusRestClient(
-        config.value.services.milvus,
-        deps.fetch,
-        timeoutMs,
-      );
+      const vectorStore = usesMilvus
+        ? new MilvusRestClient(config.value.services.milvus, deps.fetch, timeoutMs)
+        : createVectorStore(config.value, deps.stateRoot);
       if (!(await vectorStore.hasCollection(identity.collectionName))) {
         index = {
           ...index,
           state: "invalid",
           stale: true,
-          errors: ["Milvus index collection is missing"],
+          errors: [
+            usesMilvus
+              ? "Milvus index collection is missing"
+              : "Local vector index collection is missing",
+          ],
         };
-      } else {
+      } else if (usesMilvus && vectorStore instanceof MilvusRestClient) {
         const load = await vectorStore.getCollectionLoadState(
           identity.collectionName,
         );
@@ -593,7 +602,7 @@ export async function collectProjectStatus(
   if (git.state !== "ready") missing.push("git");
   if (ripgrep.state !== "ready") missing.push("ripgrep");
   if (ollama.state !== "ready") missing.push("ollama");
-  if (milvus.state !== "ready") missing.push("milvus");
+  if (usesMilvus && milvus.state !== "ready") missing.push("milvus");
   if (roslyn.state !== "ready") missing.push("roslyn");
   if (handoff.state !== "ready") missing.push("handoff");
   if (index.state === "not_initialized") missing.push("index:not_initialized");

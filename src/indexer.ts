@@ -32,10 +32,10 @@ import {
   type ProjectIndexState,
 } from "./index-state.js";
 import {
-  MilvusRestClient,
+  createVectorStore,
   type ProjectContextVectorStore,
   type VectorEntity,
-} from "./milvus-rest-client.js";
+} from "./vector-store.js";
 import { resolveProjectRoot } from "./project-path.js";
 import { resolveSourceTargets } from "./source-policy.js";
 
@@ -102,7 +102,10 @@ interface IndexerDependencies {
   ) => Promise<CollectedSourceFile[]>;
   readFile: typeof readIndexableFile;
   createEmbeddingProvider: (config: ProjectContextConfig) => EmbeddingProvider;
-  createVectorStore: (config: ProjectContextConfig) => ProjectContextVectorStore;
+  createVectorStore: (
+    config: ProjectContextConfig,
+    stateRoot: string,
+  ) => ProjectContextVectorStore;
   now: () => Date;
   nowMs: () => number;
   sleep: (milliseconds: number) => Promise<void>;
@@ -114,7 +117,7 @@ const DEFAULT_DEPENDENCIES: IndexerDependencies = {
   readFile: readIndexableFile,
   createEmbeddingProvider: (config) =>
     new OllamaEmbeddingClient(config.services.ollama),
-  createVectorStore: (config) => new MilvusRestClient(config.services.milvus),
+  createVectorStore,
   now: () => new Date(),
   nowMs: () => performance.now(),
   sleep: delay,
@@ -304,7 +307,7 @@ export async function indexProject(
 
     const prepareStartedAt = dependencies.nowMs();
     const embedding = dependencies.createEmbeddingProvider(config);
-    const vectorStore = dependencies.createVectorStore(config);
+    const vectorStore = dependencies.createVectorStore(config, stateRoot);
     const dimension = await withEmbeddingRetry(
       () => embedding.probeDimension(),
       dependencies.sleep,
@@ -495,6 +498,7 @@ export async function indexProject(
       projectRoot: project.root,
       projectSlug: identity.projectSlug,
       collectionName: identity.collectionName,
+      vectorStoreBackend: config.services.vectorStore.backend,
       embeddingModel: embedding.model,
       embeddingDimension: dimension,
       indexedAt,

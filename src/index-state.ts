@@ -16,6 +16,7 @@ import { z } from "zod/v4";
 
 import type { ProjectContextConfig } from "./config.js";
 import type { SourceKind } from "./source-policy.js";
+import type { VectorStoreBackend } from "./vector-store.js";
 
 export const INDEX_STATE_VERSION = 1;
 export const CHUNKER_VERSION = 3;
@@ -43,6 +44,7 @@ export interface ProjectIndexState {
   projectRoot: string;
   projectSlug: string;
   collectionName: string;
+  vectorStoreBackend?: VectorStoreBackend;
   embeddingModel: string;
   embeddingDimension: number;
   indexedAt: string;
@@ -62,6 +64,7 @@ const indexStateSchema = z.object({
   projectRoot: z.string().min(1).max(4_096),
   projectSlug: z.string().min(1).max(128),
   collectionName: z.string().min(1).max(255),
+  vectorStoreBackend: z.enum(["local", "milvus"]).default("milvus"),
   embeddingModel: z.string().min(1).max(512),
   embeddingDimension: z.number().int().min(2).max(32_768),
   indexedAt: z.iso.datetime(),
@@ -106,7 +109,7 @@ export function deriveProjectIndexIdentity(
   );
   const rootHash = shortHash(root, 12);
   const collectionHash = shortHash(
-    `${root}\0${config.services.ollama.embeddingModel}`,
+    `${root}\0${config.services.ollama.embeddingModel}\0${config.services.vectorStore.backend}`,
     12,
   );
   return {
@@ -290,6 +293,8 @@ export function isCompatibleIndexState(
     normalizedRoot(state.projectRoot) === normalizedRoot(projectRoot) &&
     state.projectSlug === identity.projectSlug &&
     state.collectionName === identity.collectionName &&
+    (state.vectorStoreBackend ?? "milvus") ===
+      config.services.vectorStore.backend &&
     state.embeddingModel === config.services.ollama.embeddingModel &&
     state.chunkerVersion === CHUNKER_VERSION
   );

@@ -14,6 +14,7 @@ import {
   type StatusDependencies,
 } from "../src/status.js";
 import { getRoslynWorkerPath } from "../src/graph-client.js";
+import { LocalVectorStore } from "../src/local-vector-store.js";
 
 test("collectProjectStatus returns unavailable for a missing project", async () => {
   const status = await collectProjectStatus(
@@ -41,6 +42,8 @@ test("collectProjectStatus reports ready local probes and an unbuilt Roslyn work
         "    enabled: true",
         "    projectSlug: FIXTURE",
         "services:",
+        "  vectorStore:",
+        "    backend: milvus",
         "  ollama:",
         "    url: http://localhost:11434/ollama",
         "",
@@ -186,6 +189,110 @@ test("collectProjectStatus reports ready local probes and an unbuilt Roslyn work
 
     assert.equal(failedTcpStatus.components.milvus.state, "unreachable");
     assert.match(failedTcpStatus.components.milvus.detail, /DNS lookup failed/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("collectProjectStatus does not probe Milvus when the local vector store is selected", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "project-context-status-"));
+  try {
+    await writeFile(path.join(root, PROJECT_CONFIG_FILENAME), "version: 1\n", "utf8");
+    let probeCalls = 0;
+    const status = await collectProjectStatus(root, {
+      dependencies: {
+        runCommand: async (command, args) => {
+          if (command === "git" && args.at(-1) === "--show-toplevel") {
+            return { ok: true, stdout: root, stderr: "" };
+          }
+          if (command === "git") {
+            return { ok: true, stdout: "0123456789abcdef", stderr: "" };
+          }
+          if (command === "rg") {
+            return { ok: true, stdout: "ripgrep 14.1.1", stderr: "" };
+          }
+          return { ok: false, stdout: "", stderr: "not found", error: "not found" };
+        },
+        fetch: async () => Response.json({
+          models: [{ name: "nomic-embed-text:v1.5" }],
+        }),
+        probeTcp: async () => {
+          probeCalls += 1;
+          throw new Error("Milvus should not be probed");
+        },
+        packageRoot: path.join(root, "package"),
+        stateRoot: path.join(root, "state"),
+      },
+    });
+
+    assert.equal(probeCalls, 0);
+    assert.equal(status.components.milvus.state, "ready");
+    assert.match(status.components.milvus.detail, /local vector store/i);
+    assert.equal(status.missing.includes("milvus"), false);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("collectProjectStatus invalidates a local index whose collection is missing", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "project-context-status-"));
+  const stateRoot = path.join(root, "state");
+  try {
+    await writeFile(path.join(root, PROJECT_CONFIG_FILENAME), "version: 1\n", "utf8");
+    const config = (await loadProjectConfig(root)).value;
+    const identity = deriveProjectIndexIdentity(root, config);
+    await saveProjectIndexState(
+      identity,
+      {
+        version: 1,
+        chunkerVersion: 3,
+        projectRoot: root,
+        projectSlug: identity.projectSlug,
+        collectionName: identity.collectionName,
+        vectorStoreBackend: "local",
+        embeddingModel: config.services.ollama.embeddingModel,
+        embeddingDimension: 2,
+        indexedAt: "2026-07-23T00:00:00.000Z",
+        commit: "0123456789abcdef",
+        files: {},
+      },
+      stateRoot,
+    );
+    const store = new LocalVectorStore(stateRoot);
+    await store.ensureCollection(identity.collectionName, 2);
+    await store.dropCollection(identity.collectionName);
+    let probeCalls = 0;
+
+    const status = await collectProjectStatus(root, {
+      dependencies: {
+        runCommand: async (command, args) => {
+          if (command === "git" && args.at(-1) === "--show-toplevel") {
+            return { ok: true, stdout: root, stderr: "" };
+          }
+          if (command === "git") {
+            return { ok: true, stdout: "0123456789abcdef", stderr: "" };
+          }
+          if (command === "rg") {
+            return { ok: true, stdout: "ripgrep 14.1.1", stderr: "" };
+          }
+          return { ok: false, stdout: "", stderr: "not found", error: "not found" };
+        },
+        fetch: async () => Response.json({
+          models: [{ name: "nomic-embed-text:v1.5" }],
+        }),
+        probeTcp: async () => {
+          probeCalls += 1;
+          return false;
+        },
+        packageRoot: path.join(root, "package"),
+        stateRoot,
+      },
+    });
+
+    assert.equal(probeCalls, 0);
+    assert.equal(status.index.state, "invalid");
+    assert.deepEqual(status.index.errors, ["Local vector index collection is missing"]);
+    assert.equal(status.missing.includes("index:invalid"), true);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

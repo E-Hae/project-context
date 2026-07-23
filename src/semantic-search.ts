@@ -18,10 +18,10 @@ import {
   loadProjectIndexState,
 } from "./index-state.js";
 import {
-  MilvusRestClient,
+  createVectorStore,
   type ProjectContextVectorStore,
   type VectorSearchHit,
-} from "./milvus-rest-client.js";
+} from "./vector-store.js";
 import { resolvePathInsideProject, resolveProjectRoot } from "./project-path.js";
 import {
   OllamaQueryExpander,
@@ -38,7 +38,10 @@ import {
 
 interface SemanticSearchDependencies {
   createEmbeddingProvider: (config: ProjectContextConfig) => EmbeddingProvider;
-  createVectorStore: (config: ProjectContextConfig) => ProjectContextVectorStore;
+  createVectorStore: (
+    config: ProjectContextConfig,
+    stateRoot: string,
+  ) => ProjectContextVectorStore;
   createQueryExpander: (
     config: ProjectContextConfig,
   ) => QueryExpansionProvider | null;
@@ -48,7 +51,7 @@ interface SemanticSearchDependencies {
 const DEFAULT_DEPENDENCIES: SemanticSearchDependencies = {
   createEmbeddingProvider: (config) =>
     new OllamaEmbeddingClient(config.services.ollama),
-  createVectorStore: (config) => new MilvusRestClient(config.services.milvus),
+  createVectorStore,
   createQueryExpander: (config) =>
     config.services.ollama.queryExpansionModel
       ? new OllamaQueryExpander(config.services.ollama)
@@ -189,7 +192,10 @@ export async function searchSemantic(
   }
 
   const embedding = dependencies.createEmbeddingProvider(config);
-  const vectorStore = dependencies.createVectorStore(config);
+  const vectorStore = dependencies.createVectorStore(
+    config,
+    options.stateRoot ?? DEFAULT_STATE_ROOT,
+  );
   if (!(await vectorStore.hasCollection(identity.collectionName))) {
     throw new Error("Semantic index collection is missing; reindex");
   }

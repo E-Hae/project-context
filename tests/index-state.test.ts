@@ -23,6 +23,7 @@ test("index state round-trips and lock rejects concurrent writers", async () => 
     projectRoot,
     projectSlug: identity.projectSlug,
     collectionName: identity.collectionName,
+    vectorStoreBackend: "local",
     embeddingModel: DEFAULT_CONFIG.services.ollama.embeddingModel,
     embeddingDimension: 768,
     indexedAt: "2026-07-14T00:00:00.000Z",

@@ -18,7 +18,7 @@ line ranges so an agent or developer can verify the underlying code.
 | Capability | What it does |
 | --- | --- |
 | Exact search | Fast, deterministic `rg` search with configured source and exclusion rules. |
-| Semantic search | Project-isolated embeddings in Milvus, validated against current file hashes. |
+| Semantic search | Project-isolated embeddings in a persistent local vector store by default, validated against current file hashes. |
 | C# graph tracing | Roslyn-based callers, callees, inheritance, and implementation relationships. |
 | Bounded reads | Reads only configured project files and returns a limited source range. |
 | Handoffs | Lists, reads, creates, and updates explicit Markdown handoff documents safely. |
@@ -72,12 +72,13 @@ The server exposes `context_status`, `context_search`, `context_read`,
 - `rg` (ripgrep) for exact search
 - .NET 8 runtime for C# relationship tracing; the Roslyn worker is included in
   the npm package
-- An Ollama embedding model and a REST v2-compatible Milvus instance for
-  semantic search
+- An Ollama embedding model configured for semantic search
 - An Ollama answer model for `ask`
 
-Exact search, bounded reads, status checks, and handoff access do not require
-Ollama or Milvus. `context_trace` does not require either service.
+Semantic search requires an Ollama embedding model, but uses a persistent local
+vector store by default and does not require Milvus. Exact search, bounded
+reads, status checks, and handoff access do not require Ollama or Milvus.
+`context_trace` does not require either service.
 
 ## Project configuration
 
@@ -98,22 +99,37 @@ exclude:
   - "**/*.keystore"
 ```
 
-### Optional semantic search services
+### Semantic search services
 
-Add this section only when you want semantic search or `ask`. Replace every
-example endpoint and model name with services and models you operate; these are
-placeholders, not bundled defaults.
+Semantic search needs an Ollama embedding model that you operate and configure
+for the project. The vector store is local and persistent by default, so no
+Milvus service is needed.
 
 ```yaml
 services:
   ollama:
-    url: http://ollama.example:11434
-    embeddingModel: your-embedding-model
-    answerModel: your-answer-model
-    queryExpansionModel: null
-  milvus:
-    address: milvus.example:19530
+    embeddingModel: <installed-embedding-model>
 ```
+
+### Milvus opt-in
+
+Use Milvus only when you explicitly select it. Configure the address for the
+Milvus service you operate:
+
+```yaml
+services:
+  vectorStore:
+    backend: milvus
+  milvus:
+    address: <milvus-address>
+```
+
+For legacy compatibility, a configuration that contains `services.milvus` but
+does not set `services.vectorStore.backend` continues to select Milvus. When
+both are present, the explicit `services.vectorStore.backend` value wins.
+
+Switching vector-store backends requires reindexing. Existing data in the old
+backend is not deleted or migrated automatically.
 
 ### Optional handoff documents
 

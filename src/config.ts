@@ -4,6 +4,8 @@ import path from "node:path";
 import { parse as parseYaml } from "yaml";
 import { z } from "zod/v4";
 
+import type { VectorStoreBackend } from "./vector-store.js";
+
 export const PROJECT_CONFIG_FILENAME = ".project-context.yml";
 
 const DEFAULT_EXCLUDES = [
@@ -40,6 +42,9 @@ export interface ProjectContextConfig {
     milvus: {
       address: string;
     };
+    vectorStore: {
+      backend: VectorStoreBackend;
+    };
   };
 }
 
@@ -63,6 +68,9 @@ export const DEFAULT_CONFIG: ProjectContextConfig = {
     },
     milvus: {
       address: "127.0.0.1:19530",
+    },
+    vectorStore: {
+      backend: "local",
     },
   },
 };
@@ -99,6 +107,12 @@ const rawConfigSchema = z
         milvus: z
           .object({
             address: z.string().min(1).optional(),
+          })
+          .strict()
+          .optional(),
+        vectorStore: z
+          .object({
+            backend: z.enum(["local", "milvus"]).optional(),
           })
           .strict()
           .optional(),
@@ -148,6 +162,11 @@ function mergeConfig(raw: z.infer<typeof rawConfigSchema>): ProjectContextConfig
       milvus: {
         address:
           raw.services?.milvus?.address ?? DEFAULT_CONFIG.services.milvus.address,
+      },
+      vectorStore: {
+        backend:
+          raw.services?.vectorStore?.backend ??
+          (raw.services?.milvus === undefined ? "local" : "milvus"),
       },
     },
   };

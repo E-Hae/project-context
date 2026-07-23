@@ -19,6 +19,7 @@ test("loadProjectConfig returns defaults when the file is missing", async () => 
     assert.equal(loaded.valid, true);
     assert.deepEqual(loaded.value, DEFAULT_CONFIG);
     assert.equal(loaded.value.sources.handoff.enabled, false);
+    assert.equal(loaded.value.services.vectorStore.backend, "local");
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -51,12 +52,39 @@ test("loadProjectConfig validates and merges a project config", async () => {
     assert.deepEqual(loaded.value.sources.code, ["Assets/Scripts"]);
     assert.equal(loaded.value.sources.handoff.projectSlug, "example-project");
     assert.equal(loaded.value.services.milvus.address, "localhost:19530");
+    assert.equal(loaded.value.services.vectorStore.backend, "milvus");
     assert.equal(loaded.value.services.ollama.url, DEFAULT_CONFIG.services.ollama.url);
     assert.equal(
       loaded.value.services.ollama.answerModel,
       DEFAULT_CONFIG.services.ollama.answerModel,
     );
     assert.equal(loaded.value.services.ollama.queryExpansionModel, null);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("loadProjectConfig gives an explicit vector-store backend precedence", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "project-context-config-"));
+  try {
+    await writeFile(
+      path.join(root, PROJECT_CONFIG_FILENAME),
+      [
+        "version: 1",
+        "services:",
+        "  milvus:",
+        "    address: localhost:19530",
+        "  vectorStore:",
+        "    backend: local",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    const loaded = await loadProjectConfig(root);
+
+    assert.equal(loaded.valid, true);
+    assert.equal(loaded.value.services.vectorStore.backend, "local");
   } finally {
     await rm(root, { recursive: true, force: true });
   }
