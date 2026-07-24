@@ -1,5 +1,8 @@
 import { spawn } from "node:child_process";
+import { stat } from "node:fs/promises";
 import path from "node:path";
+
+import { configuredTraceAdapterNames } from "./trace-adapter-resolver.js";
 
 export interface NpmUpdateResult {
   updated: boolean;
@@ -13,6 +16,8 @@ interface NpmCommandResult {
 
 interface NpmUpdaterDependencies {
   runNpm: (args: string[], inheritOutput: boolean) => Promise<NpmCommandResult>;
+  getTraceAdapterPackageNames: () => readonly string[];
+  isPackageInstalled: (globalPackageRoot: string, packageName: string) => Promise<boolean>;
 }
 
 function pathKey(value: string): string {
@@ -49,7 +54,23 @@ function runNpm(args: string[], inheritOutput: boolean): Promise<NpmCommandResul
   });
 }
 
-const DEFAULT_DEPENDENCIES: NpmUpdaterDependencies = { runNpm };
+async function isPackageInstalled(
+  globalPackageRoot: string,
+  packageName: string,
+): Promise<boolean> {
+  try {
+    await stat(path.join(globalPackageRoot, ...packageName.split("/")));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+const DEFAULT_DEPENDENCIES: NpmUpdaterDependencies = {
+  runNpm,
+  getTraceAdapterPackageNames: configuredTraceAdapterNames,
+  isPackageInstalled,
+};
 const GLOBAL_INSTALL_REQUIRED_MESSAGE =
   "pctx update requires a global npm installation. Run npm install --global project-context-mcp@latest.";
 
@@ -76,15 +97,44 @@ export async function updateGlobalNpmInstall(
     };
   }
 
-  const update = await deps.runNpm(
+  const installedAdapters = (await Promise.all(
+    deps
+      .getTraceAdapterPackageNames()
+      .filter((packageName) => packageName !== "project-context-mcp")
+      .map(async (packageName) =>
+        (await deps.isPackageInstalled(root.stdout.trim(), packageName))
+          ? packageName
+          : null,
+      ),
+  )).filter((packageName): packageName is string => packageName !== null);
+  const coreUpdate = await deps.runNpm(
     ["install", "--global", "project-context-mcp@latest"],
     true,
   );
-  if (update.exitCode !== 0) {
+  if (coreUpdate.exitCode !== 0) {
     return { updated: false, message: "Update failed; npm reported an error." };
   }
+
+  if (installedAdapters.length === 0) {
+    return {
+      updated: true,
+      message: "Updated project-context-mcp. Restart your MCP client to use the new version.",
+    };
+  }
+
+  const adapterUpdate = await deps.runNpm(
+    ["install", "--global", ...installedAdapters.map((packageName) => `${packageName}@latest`)],
+    true,
+  );
+  if (adapterUpdate.exitCode !== 0) {
+    return {
+      updated: false,
+      message: `Updated project-context-mcp, but trace adapter update failed for ${installedAdapters.join(", ")}.`,
+    };
+  }
+
   return {
     updated: true,
-    message: "Updated project-context-mcp. Restart your MCP client to use the new version.",
+    message: `Updated project-context-mcp and ${installedAdapters.join(", ")}. Restart your MCP client to use the new version.`,
   };
 }

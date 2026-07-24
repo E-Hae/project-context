@@ -206,7 +206,7 @@ not need them.
 | `pctx trace <project-root> <symbol> <direction> [max-results] [language]` | Trace relationships with an installed language adapter. |
 | `pctx read <project-root> <path> [start-line] [end-line]` | Read an allowed, bounded file range. |
 | `pctx handoff save|update ...` | Create or update explicit handoff Markdown. |
-| `pctx update` | Update a global npm installation to the latest release. |
+| `pctx update` | Update the global core and any installed trace adapters to their latest releases. |
 | `pctx serve --mcp` | Start the stdio MCP server. |
 
 ## Development
