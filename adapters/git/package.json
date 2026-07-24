@@ -1,0 +1,21 @@
+{
+  "name": "project-context-mcp-git",
+  "version": "1.0.0",
+  "license": "MIT",
+  "type": "module",
+  "description": "Git history change-impact adapter for project-context-mcp.",
+  "files": ["dist/src", "LICENSE", "THIRD_PARTY_NOTICES.md"],
+  "exports": { ".": "./dist/src/index.js" },
+  "scripts": {
+    "clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
+    "prebuild": "npm --prefix ../.. run build",
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "npm run clean && npm run build && node --test \"dist/tests/*.test.js\"",
+    "verify": "npm run typecheck && npm test",
+    "prepublishOnly": "npm run verify"
+  },
+  "engines": { "node": ">=20" },
+  "peerDependencies": { "project-context-mcp": "^2.3.0" },
+  "devDependencies": { "@types/node": "24.10.1", "project-context-mcp": "file:../..", "typescript": "6.0.3" }
+}

@@ -376,6 +376,9 @@ export async function traceProject(
     symbol,
     direction: input.direction,
     maxResults,
+    adapterConfig: {
+      unity: loadedConfig.value.adapters.unity,
+    },
   };
   let rawResponse: unknown;
   try {

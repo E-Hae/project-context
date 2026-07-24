@@ -3,6 +3,7 @@ import { stat } from "node:fs/promises";
 import path from "node:path";
 
 import { configuredTraceAdapterNames } from "./trace-adapter-resolver.js";
+import { configuredImpactAdapterNames } from "./impact-adapter-resolver.js";
 
 export interface NpmUpdateResult {
   updated: boolean;
@@ -68,7 +69,9 @@ async function isPackageInstalled(
 
 const DEFAULT_DEPENDENCIES: NpmUpdaterDependencies = {
   runNpm,
-  getTraceAdapterPackageNames: configuredTraceAdapterNames,
+  getTraceAdapterPackageNames: () => [
+    ...new Set([...configuredTraceAdapterNames(), ...configuredImpactAdapterNames()]),
+  ],
   isPackageInstalled,
 };
 const GLOBAL_INSTALL_REQUIRED_MESSAGE =

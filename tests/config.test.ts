@@ -40,6 +40,12 @@ test("loadProjectConfig validates and merges a project config", async () => {
         "services:",
         "  milvus:",
         "    address: localhost:19530",
+        "adapters:",
+        "  unity:",
+        "    mode: batch",
+        "    editorVersion: 6000.0.32f1",
+        "  git:",
+        "    historyLimit: 500",
         "",
       ].join("\n"),
       "utf8",
@@ -55,6 +61,9 @@ test("loadProjectConfig validates and merges a project config", async () => {
     assert.equal(loaded.value.services.vectorStore.backend, "milvus");
     assert.equal(loaded.value.services.ollama.url, DEFAULT_CONFIG.services.ollama.url);
     assert.equal(loaded.value.services.ollama.queryExpansionModel, null);
+    assert.equal(loaded.value.adapters.unity.mode, "batch");
+    assert.equal(loaded.value.adapters.unity.editorVersion, "6000.0.32f1");
+    assert.equal(loaded.value.adapters.git.historyLimit, 500);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

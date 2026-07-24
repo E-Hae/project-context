@@ -1,6 +1,6 @@
 {
   "name": "project-context-mcp",
-  "version": "2.2.1",
+  "version": "2.3.0",
   "license": "MIT",
   "type": "module",
   "description": "Evidence-first local MCP server and CLI for codebase discovery, search, and source-backed tracing adapters.",
@@ -29,7 +29,8 @@
     "adapters/*"
   ],
   "exports": {
-    "./trace-adapter": "./dist/src/trace-adapter.js"
+    "./trace-adapter": "./dist/src/trace-adapter.js",
+    "./impact-adapter": "./dist/src/impact-adapter.js"
   },
   "publishConfig": {
     "access": "public"

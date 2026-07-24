@@ -45,6 +45,16 @@ export interface ProjectContextConfig {
       backend: VectorStoreBackend;
     };
   };
+  adapters: {
+    unity: {
+      mode: "yaml" | "batch";
+      editorVersion: string | null;
+      batchTimeoutSeconds: number;
+    };
+    git: {
+      historyLimit: number;
+    };
+  };
 }
 
 export const DEFAULT_CONFIG: ProjectContextConfig = {
@@ -69,6 +79,16 @@ export const DEFAULT_CONFIG: ProjectContextConfig = {
     },
     vectorStore: {
       backend: "local",
+    },
+  },
+  adapters: {
+    unity: {
+      mode: "yaml",
+      editorVersion: null,
+      batchTimeoutSeconds: 120,
+    },
+    git: {
+      historyLimit: 200,
     },
   },
 };
@@ -110,6 +130,25 @@ const rawConfigSchema = z
         vectorStore: z
           .object({
             backend: z.enum(["local", "milvus"]).optional(),
+          })
+          .strict()
+          .optional(),
+      })
+      .strict()
+      .optional(),
+    adapters: z
+      .object({
+        unity: z
+          .object({
+            mode: z.enum(["yaml", "batch"]).optional(),
+            editorVersion: z.string().min(1).max(128).nullable().optional(),
+            batchTimeoutSeconds: z.number().int().min(10).max(3_600).optional(),
+          })
+          .strict()
+          .optional(),
+        git: z
+          .object({
+            historyLimit: z.number().int().min(1).max(5_000).optional(),
           })
           .strict()
           .optional(),
@@ -161,6 +200,22 @@ function mergeConfig(raw: z.infer<typeof rawConfigSchema>): ProjectContextConfig
         backend:
           raw.services?.vectorStore?.backend ??
           (raw.services?.milvus === undefined ? "local" : "milvus"),
+      },
+    },
+    adapters: {
+      unity: {
+        mode: raw.adapters?.unity?.mode ?? DEFAULT_CONFIG.adapters.unity.mode,
+        editorVersion:
+          raw.adapters?.unity?.editorVersion === undefined
+            ? DEFAULT_CONFIG.adapters.unity.editorVersion
+            : raw.adapters.unity.editorVersion,
+        batchTimeoutSeconds:
+          raw.adapters?.unity?.batchTimeoutSeconds ??
+          DEFAULT_CONFIG.adapters.unity.batchTimeoutSeconds,
+      },
+      git: {
+        historyLimit:
+          raw.adapters?.git?.historyLimit ?? DEFAULT_CONFIG.adapters.git.historyLimit,
       },
     },
   };

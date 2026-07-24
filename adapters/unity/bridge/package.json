@@ -1,0 +1,6 @@
+{
+  "name": "com.project-context.asset-graph",
+  "version": "1.0.0",
+  "displayName": "Project Context Asset Graph Bridge",
+  "description": "Optional Unity Editor bridge for project-context-mcp batch asset dependency analysis."
+}

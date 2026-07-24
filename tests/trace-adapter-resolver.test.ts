@@ -43,10 +43,11 @@ test("trace adapter candidates retain the default and honor PROJECT_CONTEXT_TRAC
   assert.deepEqual(configuredTraceAdapterNames(""), [
     "project-context-mcp-csharp",
     "project-context-mcp-typescript",
+    "project-context-mcp-unity",
   ]);
   assert.deepEqual(
     configuredTraceAdapterNames("fixture-python, project-context-mcp-csharp, invalid package"),
-    ["project-context-mcp-csharp", "project-context-mcp-typescript", "fixture-python"],
+    ["project-context-mcp-csharp", "project-context-mcp-typescript", "project-context-mcp-unity", "fixture-python"],
   );
 });
 

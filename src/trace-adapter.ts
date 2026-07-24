@@ -53,6 +53,13 @@ export interface TraceAdapterRequest {
   symbol: string;
   direction: TraceDirection;
   maxResults: number;
+  adapterConfig?: {
+    unity: {
+      mode: "yaml" | "batch";
+      editorVersion: string | null;
+      batchTimeoutSeconds: number;
+    };
+  };
 }
 
 export interface TraceAdapterResponse {

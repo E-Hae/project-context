@@ -4,6 +4,7 @@ import { z } from "zod/v4";
 
 import { readProjectDocument } from "./document-store.js";
 import { traceProject } from "./graph-client.js";
+import { analyzeProjectImpact } from "./impact-client.js";
 import {
   getHandoff,
   listHandoffs,
@@ -16,6 +17,7 @@ import { collectProjectStatus } from "./status.js";
 export interface ProjectContextServerOptions {
   handoffRoot?: string;
   trace?: typeof traceProject;
+  impact?: typeof analyzeProjectImpact;
   search?: typeof searchProject;
 }
 
@@ -214,6 +216,34 @@ export function createProjectContextServer(
           ],
           isError: true,
         };
+      }
+    },
+  );
+
+  server.registerTool(
+    "context_impact",
+    {
+      title: "Analyze change impact",
+      description: "Uses an installed impact adapter to identify files that historically change together with a project file.",
+      inputSchema: {
+        projectPath: z.string().min(1).describe("Absolute or relative project path"),
+        target: z.string().min(1).max(4_096).describe("Project-relative file path"),
+        maxResults: z.number().int().min(1).max(200).default(50),
+        language: z.string().min(1).max(128).optional().describe("Impact adapter language; defaults to git"),
+      },
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    },
+    async ({ projectPath, target, maxResults, language }) => {
+      try {
+        const result = await (options.impact ?? analyzeProjectImpact)({
+          projectPath,
+          target,
+          maxResults,
+          ...(language === undefined ? {} : { language }),
+        });
+        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }], structuredContent: { ...result } };
+      } catch (error) {
+        return { content: [{ type: "text", text: error instanceof Error ? error.message : String(error) }], isError: true };
       }
     },
   );

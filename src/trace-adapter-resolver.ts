@@ -8,6 +8,7 @@ import type { TraceAdapter } from "./trace-adapter.js";
 const DEFAULT_TRACE_ADAPTERS = [
   "project-context-mcp-csharp",
   "project-context-mcp-typescript",
+  "project-context-mcp-unity",
 ];
 const PACKAGE_NAME_PATTERN = /^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/iu;
 const requireForResolver = createRequire(import.meta.url);
@@ -121,8 +122,8 @@ function globalNodeModulesRoot(): Promise<string | null> {
   if (globalNodeModulesRootPromise !== undefined) return globalNodeModulesRootPromise;
   globalNodeModulesRootPromise = new Promise((resolve) => {
     execFile(
-      process.platform === "win32" ? "npm.cmd" : "npm",
-      ["root", "--global"],
+      process.platform === "win32" ? (process.env.ComSpec ?? "cmd.exe") : "npm",
+      process.platform === "win32" ? ["/d", "/s", "/c", "npm.cmd", "root", "--global"] : ["root", "--global"],
       { encoding: "utf8", timeout: 5_000, windowsHide: true },
       (error, stdout) => {
         if (error !== null) {

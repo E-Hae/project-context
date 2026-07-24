@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { readProjectDocument } from "./document-store.js";
 import { traceProject, type TraceDirection } from "./graph-client.js";
 import { saveHandoff, updateHandoff } from "./handoff-store.js";
+import { analyzeProjectImpact } from "./impact-client.js";
 import { searchProject, type SearchMode } from "./hybrid-search.js";
 import { indexProject } from "./indexer.js";
 import { serveMcp } from "./mcp-server.js";
@@ -23,6 +24,7 @@ function printUsage(stream: NodeJS.WriteStream = process.stderr): void {
       "  pctx status [project-root]",
       "  pctx search <project-root> <query> [auto|exact|graph|semantic] [all|code|documents] [max-results]",
       "  pctx trace <project-root> <symbol> <callers|callees|inherits|implements> [max-results] [language]",
+      "  pctx impact <project-root> <path> [max-results] [language]",
       "  pctx read <project-root> <path> [start-line] [end-line]",
       "  pctx handoff save <project-root> <label> (--file <markdown-file> | --stdin)",
       "  pctx handoff update <project-root> <label> (--file <markdown-file> | --stdin) [--append]",
@@ -283,6 +285,19 @@ async function main(args: string[]): Promise<number> {
       projectPath: projectPath!,
       symbol: symbol!,
       direction: directionValue as TraceDirection,
+      maxResults,
+      ...(language === undefined ? {} : { language }),
+    });
+    process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+    return 0;
+  }
+
+  if (command === "impact" && rest.length >= 2 && rest.length <= 4) {
+    const [projectPath, target, maxResultsValue, language] = rest;
+    const maxResults = maxResultsValue === undefined ? 50 : Number(maxResultsValue);
+    const result = await analyzeProjectImpact({
+      projectPath: projectPath!,
+      target: target!,
       maxResults,
       ...(language === undefined ? {} : { language }),
     });

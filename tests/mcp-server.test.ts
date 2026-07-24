@@ -86,6 +86,7 @@ test("context_status is exposed through MCP and returns structured content", asy
         "context_search",
         "context_read",
         "context_trace",
+        "context_impact",
         "context_handoff_list",
         "context_handoff_get",
         "context_handoff_save",

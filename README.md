@@ -48,6 +48,14 @@ adapter:
 npm install --global project-context-mcp-typescript
 ```
 
+Unity projects can add asset-graph tracing, and repositories with Git history
+can add change-impact analysis:
+
+```sh
+npm install --global project-context-mcp-unity
+npm install --global project-context-mcp-git
+```
+
 Then add a `.project-context.yml` file to the project you want to inspect and
 run a status check:
 
@@ -80,7 +88,7 @@ Add this standard MCP server entry to your client's configuration:
 ```
 
 The server exposes `context_status`, `context_search`, `context_read`,
-`context_trace`, and the `context_handoff_*` tools. Start with
+`context_trace`, `context_impact`, and the `context_handoff_*` tools. Start with
 `context_status` to confirm the selected project and local dependencies.
 
 ## Requirements
@@ -120,6 +128,11 @@ Without a compatible adapter, an explicit trace reports an installation hint.
 Automatic graph routing falls back to semantic search when tracing is unavailable
 or ambiguous. Pass an optional language after `max-results` to the CLI trace
 command, or the optional `language` field to `context_trace`.
+
+The Unity adapter is named `project-context-mcp-unity`. Its YAML mode follows
+prefab, scene, ScriptableObject, `.meta` GUID, `.asmdef`, and `.asmref` links.
+Add Unity `Assets` paths to `sources.code`, then use `unity` as the trace
+language when another adapter also matches the project.
 
 ## Project configuration
 
@@ -195,6 +208,44 @@ files.
 state and handoff storage for tests or automation; typical installations do
 not need them.
 
+### Unity batch mode
+
+YAML analysis requires no Unity installation. For importer-aware dependencies,
+configure a Unity Hub Editor version and batch mode:
+
+```yaml
+adapters:
+  unity:
+    mode: batch
+    editorVersion: 6000.0.32f1
+    batchTimeoutSeconds: 180
+```
+
+The adapter resolves standard Unity Hub locations for the selected version.
+Set `PROJECT_CONTEXT_UNITY_EDITOR` to override the executable path for one
+machine. Batch mode requires the bundled `com.project-context.asset-graph` UPM
+bridge: install the `bridge` directory included in the Unity adapter package as
+a local Unity package. It calls `AssetDatabase.GetDependencies` and returns a
+temporary JSON result outside the project; Unity may still update its regular
+`Library` cache while it runs.
+
+### Git change impact
+
+The Git adapter is an impact operation, not a symbol trace. It ranks files that
+changed in the same commits as a target file:
+
+```sh
+pctx impact . src/npm-updater.ts 20 git
+```
+
+Tune the bounded history window per project when needed:
+
+```yaml
+adapters:
+  git:
+    historyLimit: 500
+```
+
 ## CLI reference
 
 | Command | Purpose |
@@ -204,9 +255,10 @@ not need them.
 | `pctx watch <project-root> [interval-ms]` | Keep an index current with filesystem events and safety scans. |
 | `pctx search <project-root> <query> [mode] [scope] [max-results]` | Search in `auto`, `exact`, `graph`, or `semantic` mode. |
 | `pctx trace <project-root> <symbol> <direction> [max-results] [language]` | Trace relationships with an installed language adapter. |
+| `pctx impact <project-root> <path> [max-results] [language]` | Rank files that historically change with a project file. |
 | `pctx read <project-root> <path> [start-line] [end-line]` | Read an allowed, bounded file range. |
 | `pctx handoff save|update ...` | Create or update explicit handoff Markdown. |
-| `pctx update` | Update the global core and any installed trace adapters to their latest releases. |
+| `pctx update` | Update the global core and any installed trace or impact adapters to their latest releases. |
 | `pctx serve --mcp` | Start the stdio MCP server. |
 
 ## Development
