@@ -68,6 +68,7 @@ test("CLI prints help successfully", async () => {
   const result = await runCli(["--help"], tmpdir());
 
   assert.match(result.stdout, /pctx search/);
+  assert.match(result.stdout, /pctx update/);
   assert.doesNotMatch(result.stdout, /pctx ask/);
   assert.equal(result.stderr, "");
 });

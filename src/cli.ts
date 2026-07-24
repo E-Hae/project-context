@@ -2,6 +2,7 @@
 
 import { readFile } from "node:fs/promises";
 import process from "node:process";
+import { fileURLToPath } from "node:url";
 
 import { readProjectDocument } from "./document-store.js";
 import { traceProject, type TraceDirection } from "./graph-client.js";
@@ -9,6 +10,7 @@ import { saveHandoff, updateHandoff } from "./handoff-store.js";
 import { searchProject, type SearchMode } from "./hybrid-search.js";
 import { indexProject } from "./indexer.js";
 import { serveMcp } from "./mcp-server.js";
+import { packageRootFromCliPath, updateGlobalNpmInstall } from "./npm-updater.js";
 import { collectProjectStatus } from "./status.js";
 import { watchProject } from "./watcher.js";
 
@@ -24,6 +26,7 @@ function printUsage(stream: NodeJS.WriteStream = process.stderr): void {
       "  pctx read <project-root> <path> [start-line] [end-line]",
       "  pctx handoff save <project-root> <label> (--file <markdown-file> | --stdin)",
       "  pctx handoff update <project-root> <label> (--file <markdown-file> | --stdin) [--append]",
+      "  pctx update",
       "  pctx serve --mcp",
       "",
     ].join("\n"),
@@ -163,6 +166,13 @@ async function main(args: string[]): Promise<number> {
   if (command === "serve" && rest.length === 1 && rest[0] === "--mcp") {
     await serveMcp();
     return 0;
+  }
+
+  if (command === "update" && rest.length === 0) {
+    const packageRoot = packageRootFromCliPath(fileURLToPath(import.meta.url));
+    const result = await updateGlobalNpmInstall(packageRoot);
+    process.stdout.write(`${result.message}\n`);
+    return result.updated ? 0 : 1;
   }
 
   if (command === "handoff" && rest.length >= 3) {

@@ -48,6 +48,7 @@ run a status check:
 pctx status /path/to/project
 pctx index /path/to/project
 pctx search /path/to/project "session restore" auto code 10
+pctx update
 ```
 
 On Windows, quote paths that contain spaces:
@@ -181,14 +182,15 @@ not need them.
 
 | Command | Purpose |
 | --- | --- |
-| `project-context-mcp status [project-root]` | Check configuration, dependencies, and index freshness. |
-| `project-context-mcp index <project-root> [--rebuild]` | Create or incrementally update the semantic index. |
-| `project-context-mcp watch <project-root> [interval-ms]` | Keep an index current with filesystem events and safety scans. |
-| `project-context-mcp search <project-root> <query> [mode] [scope] [max-results]` | Search in `auto`, `exact`, `graph`, or `semantic` mode. |
-| `project-context-mcp trace <project-root> <symbol> <direction> [max-results] [language]` | Trace relationships with an installed language adapter. |
-| `project-context-mcp read <project-root> <path> [start-line] [end-line]` | Read an allowed, bounded file range. |
-| `project-context-mcp handoff save|update ...` | Create or update explicit handoff Markdown. |
-| `project-context-mcp serve --mcp` | Start the stdio MCP server. |
+| `pctx status [project-root]` | Check configuration, dependencies, and index freshness. |
+| `pctx index <project-root> [--rebuild]` | Create or incrementally update the semantic index. |
+| `pctx watch <project-root> [interval-ms]` | Keep an index current with filesystem events and safety scans. |
+| `pctx search <project-root> <query> [mode] [scope] [max-results]` | Search in `auto`, `exact`, `graph`, or `semantic` mode. |
+| `pctx trace <project-root> <symbol> <direction> [max-results] [language]` | Trace relationships with an installed language adapter. |
+| `pctx read <project-root> <path> [start-line] [end-line]` | Read an allowed, bounded file range. |
+| `pctx handoff save|update ...` | Create or update explicit handoff Markdown. |
+| `pctx update` | Update a global npm installation to the latest release. |
+| `pctx serve --mcp` | Start the stdio MCP server. |
 
 ## Development
 
