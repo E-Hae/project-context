@@ -75,6 +75,7 @@ export interface TraceAdapterProbeResult {
 export interface TraceAdapter {
   name: string;
   language: string;
+  languageAliases?: readonly string[];
   sourceFileExtensions: readonly string[];
   auxiliaryFileExtensions?: readonly string[];
   probe(): Promise<TraceAdapterProbeResult>;

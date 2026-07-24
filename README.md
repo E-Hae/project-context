@@ -41,6 +41,13 @@ To enable C# tracing, install the optional C# adapter alongside the core:
 npm install --global project-context-mcp-csharp
 ```
 
+To enable TypeScript and JavaScript tracing, install the optional TypeScript
+adapter:
+
+```sh
+npm install --global project-context-mcp-typescript
+```
+
 Then add a `.project-context.yml` file to the project you want to inspect and
 run a status check:
 
@@ -82,9 +89,11 @@ The server exposes `context_status`, `context_search`, `context_read`,
 - `rg` (ripgrep) for exact search
 - An Ollama embedding model configured for semantic search
 
-The core package runs status, exact search, and semantic search without .NET
-or a language adapter. C# tracing additionally requires .NET 8 and the
-`project-context-mcp-csharp` adapter package.
+The core package runs status, exact search, and semantic search without .NET,
+TypeScript, or a language adapter. C# tracing additionally requires .NET 8 and
+the `project-context-mcp-csharp` adapter package. TypeScript and JavaScript
+tracing uses the TypeScript compiler bundled by the
+`project-context-mcp-typescript` adapter.
 
 Semantic search requires an Ollama embedding model, but uses a persistent local
 vector store by default and does not require Milvus. Exact search, bounded
@@ -94,10 +103,18 @@ reads, status checks, and handoff access do not require Ollama or Milvus.
 ## Trace adapters
 
 `context_trace` and `project-context-mcp trace` use an installed trace adapter.
-The core discovers the built-in C# candidate and any comma-separated package
-names in `PROJECT_CONTEXT_TRACE_ADAPTERS`. It selects the single adapter whose
-source extensions match the project, or requires `language` when several match.
-It never scans `node_modules` or installs packages automatically.
+The core discovers the default C# and TypeScript candidates and any
+comma-separated package names in `PROJECT_CONTEXT_TRACE_ADAPTERS`. It selects
+the single adapter whose source extensions match the project, or requires
+`language` when several match. It never scans `node_modules` or installs
+packages automatically.
+
+The TypeScript adapter is named `project-context-mcp-typescript` and handles
+TypeScript and JavaScript source files. Its canonical language is `typescript`,
+with `javascript` and `js` accepted as language aliases. JavaScript analysis
+enables `allowJs` for the requested JavaScript sources and respects the
+project's `checkJs` and JSDoc settings; dynamic runtime dispatch can produce
+partial results.
 
 Without a compatible adapter, an explicit trace reports an installation hint.
 Automatic graph routing falls back to semantic search when tracing is unavailable
@@ -200,6 +217,7 @@ cd project-context
 npm ci
 npm run verify
 npm --workspace adapters/csharp run verify
+npm --workspace adapters/typescript run verify
 npm pack --dry-run
 ```
 

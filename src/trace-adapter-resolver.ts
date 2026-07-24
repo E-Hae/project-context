@@ -1,7 +1,17 @@
+import { execFile } from "node:child_process";
+import { createRequire } from "node:module";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+
 import type { TraceAdapter } from "./trace-adapter.js";
 
-const DEFAULT_TRACE_ADAPTERS = ["project-context-mcp-csharp"];
+const DEFAULT_TRACE_ADAPTERS = [
+  "project-context-mcp-csharp",
+  "project-context-mcp-typescript",
+];
 const PACKAGE_NAME_PATTERN = /^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/iu;
+const requireForResolver = createRequire(import.meta.url);
+let globalNodeModulesRootPromise: Promise<string | null> | undefined;
 
 export interface TraceAdapterSelection {
   language?: string;
@@ -71,6 +81,9 @@ function isTraceAdapter(candidate: unknown): candidate is TraceAdapter {
   return (
     typeof adapter.name === "string" &&
     typeof adapter.language === "string" &&
+    (adapter.languageAliases === undefined ||
+      (Array.isArray(adapter.languageAliases) &&
+        adapter.languageAliases.every((language) => typeof language === "string"))) &&
     Array.isArray(adapter.sourceFileExtensions) &&
     adapter.sourceFileExtensions.every((extension) => typeof extension === "string") &&
     (adapter.auxiliaryFileExtensions === undefined ||
@@ -91,8 +104,62 @@ function missingPackage(error: unknown, packageName: string): boolean {
   );
 }
 
+export function resolvePackageFromNodeModulesRoot(
+  packageName: string,
+  nodeModulesRoot: string,
+): string | null {
+  try {
+    return requireForResolver.resolve(packageName, {
+      paths: [path.dirname(path.resolve(nodeModulesRoot))],
+    });
+  } catch {
+    return null;
+  }
+}
+
+function globalNodeModulesRoot(): Promise<string | null> {
+  if (globalNodeModulesRootPromise !== undefined) return globalNodeModulesRootPromise;
+  globalNodeModulesRootPromise = new Promise((resolve) => {
+    execFile(
+      process.platform === "win32" ? "npm.cmd" : "npm",
+      ["root", "--global"],
+      { encoding: "utf8", timeout: 5_000, windowsHide: true },
+      (error, stdout) => {
+        if (error !== null) {
+          resolve(null);
+          return;
+        }
+        const candidate = stdout.trim().split(/\r?\n/u).at(-1)?.trim() ?? "";
+        resolve(candidate && path.isAbsolute(candidate) ? path.normalize(candidate) : null);
+      },
+    );
+  });
+  return globalNodeModulesRootPromise;
+}
+
+async function loadTraceAdapterModule(packageName: string): Promise<unknown> {
+  try {
+    return await import(packageName);
+  } catch (error) {
+    if (!missingPackage(error, packageName)) throw error;
+    const globalRoot = await globalNodeModulesRoot();
+    if (globalRoot === null) throw error;
+    const resolved = resolvePackageFromNodeModulesRoot(packageName, globalRoot);
+    if (resolved === null) throw error;
+    return import(pathToFileURL(resolved).href);
+  }
+}
+
 function normalizedLanguage(value: string | undefined): string | null {
   return value?.trim().toLocaleLowerCase("en-US") || null;
+}
+
+function adapterLanguages(adapter: TraceAdapter): Set<string> {
+  return new Set(
+    [adapter.language, ...(adapter.languageAliases ?? [])]
+      .map((value) => normalizedLanguage(value))
+      .filter((value): value is string => value !== null),
+  );
 }
 
 function normalizedExtensions(values: readonly string[] | undefined): Set<string> {
@@ -109,7 +176,7 @@ export async function discoverTraceAdapters(
   const candidates = options.packageNames === undefined
     ? configuredTraceAdapterNames()
     : [...new Set(options.packageNames)];
-  const loadModule = options.loadModule ?? ((packageName) => import(packageName));
+  const loadModule = options.loadModule ?? loadTraceAdapterModule;
   const adapters: TraceAdapter[] = [];
   const diagnostics: TraceAdapterDiagnostic[] = [];
 
@@ -155,7 +222,7 @@ export async function resolveTraceAdapter(
   const language = normalizedLanguage(selection.language);
   const sourceFileExtensions = normalizedExtensions(selection.sourceFileExtensions);
   const matching = discovery.adapters.filter((adapter) => {
-    if (language !== null && adapter.language.toLocaleLowerCase("en-US") !== language) {
+    if (language !== null && !adapterLanguages(adapter).has(language)) {
       return false;
     }
     if (sourceFileExtensions.size === 0) return true;
