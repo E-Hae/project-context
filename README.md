@@ -29,8 +29,11 @@ Install the CLI globally:
 
 ```sh
 npm install --global project-context-mcp
-project-context-mcp --help
+pctx --help
 ```
+
+`pctx` is the short CLI alias. `project-context-mcp` remains available as the
+fully qualified command.
 
 To enable C# tracing, install the optional C# adapter alongside the core:
 
@@ -42,15 +45,15 @@ Then add a `.project-context.yml` file to the project you want to inspect and
 run a status check:
 
 ```sh
-project-context-mcp status /path/to/project
-project-context-mcp index /path/to/project
-project-context-mcp search /path/to/project "session restore" auto code 10
+pctx status /path/to/project
+pctx index /path/to/project
+pctx search /path/to/project "session restore" auto code 10
 ```
 
 On Windows, quote paths that contain spaces:
 
 ```powershell
-project-context-mcp status 'C:\work\my project'
+pctx status 'C:\work\my project'
 ```
 
 ### Connect an MCP client
@@ -207,7 +210,7 @@ C# adapter tarball includes its worker and Microsoft third-party notices.
 
 ## Migration from 0.3.x
 
-Upgrade the core to `project-context-mcp@1.0.1`. If you used C# tracing in
+Upgrade the core to `project-context-mcp@1.0.2`. If you used C# tracing in
 0.3.x, install `project-context-mcp-csharp@1.0.0` and ensure .NET 8 is
 available. No project configuration change is required for the existing C#
 trace command. Core-only installations remain fully supported; only graph
