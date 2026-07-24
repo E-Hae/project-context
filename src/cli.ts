@@ -3,7 +3,6 @@
 import { readFile } from "node:fs/promises";
 import process from "node:process";
 
-import { askProject, formatAssistantAnswer } from "./assistant.js";
 import { readProjectDocument } from "./document-store.js";
 import { traceProject, type TraceDirection } from "./graph-client.js";
 import { saveHandoff, updateHandoff } from "./handoff-store.js";
@@ -20,7 +19,6 @@ function printUsage(stream: NodeJS.WriteStream = process.stderr): void {
       "  pctx index <project-root> [--rebuild]",
       "  pctx watch <project-root> [interval-ms]",
       "  pctx status [project-root]",
-      "  pctx ask <project-root> <question>",
       "  pctx search <project-root> <query> [auto|exact|graph|semantic] [all|code|documents] [max-results]",
       "  pctx trace <project-root> <symbol> <callers|callees|inherits|implements> [max-results] [language]",
       "  pctx read <project-root> <path> [start-line] [end-line]",
@@ -164,16 +162,6 @@ async function main(args: string[]): Promise<number> {
 
   if (command === "serve" && rest.length === 1 && rest[0] === "--mcp") {
     await serveMcp();
-    return 0;
-  }
-
-  if (command === "ask" && rest.length === 2) {
-    const stateRoot = process.env.PROJECT_CONTEXT_STATE_ROOT;
-    const result = await askProject(
-      { projectPath: rest[0]!, question: rest[1]! },
-      stateRoot ? { stateRoot } : {},
-    );
-    process.stdout.write(formatAssistantAnswer(result));
     return 0;
   }
 

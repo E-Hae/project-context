@@ -36,7 +36,6 @@ export interface ProjectContextConfig {
     ollama: {
       url: string;
       embeddingModel: string;
-      answerModel: string;
       queryExpansionModel: string | null;
     };
     milvus: {
@@ -63,7 +62,6 @@ export const DEFAULT_CONFIG: ProjectContextConfig = {
     ollama: {
       url: "http://127.0.0.1:11434",
       embeddingModel: "nomic-embed-text:v1.5",
-      answerModel: "qwen3.5:9b",
       queryExpansionModel: null,
     },
     milvus: {
@@ -99,7 +97,6 @@ const rawConfigSchema = z
           .object({
             url: z.url().optional(),
             embeddingModel: z.string().min(1).optional(),
-            answerModel: z.string().min(1).optional(),
             queryExpansionModel: z.string().min(1).nullable().optional(),
           })
           .strict()
@@ -151,9 +148,6 @@ function mergeConfig(raw: z.infer<typeof rawConfigSchema>): ProjectContextConfig
         embeddingModel:
           raw.services?.ollama?.embeddingModel ??
           DEFAULT_CONFIG.services.ollama.embeddingModel,
-        answerModel:
-          raw.services?.ollama?.answerModel ??
-          DEFAULT_CONFIG.services.ollama.answerModel,
         queryExpansionModel:
           raw.services?.ollama?.queryExpansionModel === undefined
             ? DEFAULT_CONFIG.services.ollama.queryExpansionModel

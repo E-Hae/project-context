@@ -80,10 +80,9 @@ The server exposes `context_status`, `context_search`, `context_read`,
 - Node.js 20 or newer
 - `rg` (ripgrep) for exact search
 - An Ollama embedding model configured for semantic search
-- An Ollama answer model for `ask`
 
-The core package runs status, exact search, semantic search, and `ask` without
-.NET or a language adapter. C# tracing additionally requires .NET 8 and the
+The core package runs status, exact search, and semantic search without .NET
+or a language adapter. C# tracing additionally requires .NET 8 and the
 `project-context-mcp-csharp` adapter package.
 
 Semantic search requires an Ollama embedding model, but uses a persistent local
@@ -188,7 +187,6 @@ not need them.
 | `project-context-mcp search <project-root> <query> [mode] [scope] [max-results]` | Search in `auto`, `exact`, `graph`, or `semantic` mode. |
 | `project-context-mcp trace <project-root> <symbol> <direction> [max-results] [language]` | Trace relationships with an installed language adapter. |
 | `project-context-mcp read <project-root> <path> [start-line] [end-line]` | Read an allowed, bounded file range. |
-| `project-context-mcp ask <project-root> <question>` | Produce a local, source-cited development answer. |
 | `project-context-mcp handoff save|update ...` | Create or update explicit handoff Markdown. |
 | `project-context-mcp serve --mcp` | Start the stdio MCP server. |
 
@@ -208,13 +206,11 @@ builds and verifies its Roslyn worker separately. The core tarball includes
 JavaScript dependency notices but excludes workers and Microsoft binaries; the
 C# adapter tarball includes its worker and Microsoft third-party notices.
 
-## Migration from 0.3.x
+## Migration to 2.0.0
 
-Upgrade the core to `project-context-mcp@1.0.3`. If you used C# tracing in
-0.3.x, install `project-context-mcp-csharp@1.0.0` and ensure .NET 8 is
-available. No project configuration change is required for the existing C#
-trace command. Core-only installations remain fully supported; only graph
-tracing becomes optional.
+The `ask` CLI command and `services.ollama.answerModel` setting were removed.
+Use an MCP client with `context_search`, `context_read`, and `context_trace` to
+compose answers, and remove `answerModel` from existing project configuration.
 
 ## License
 
