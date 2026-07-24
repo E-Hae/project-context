@@ -181,7 +181,7 @@ export async function searchSemantic(
     options.stateRoot ?? DEFAULT_STATE_ROOT,
   );
   if (!loadedState.exists) {
-    throw new Error("Semantic index is not initialized; run project-context index");
+    throw new Error("Semantic index is not initialized; run pctx index");
   }
   if (!loadedState.valid || loadedState.value === null) {
     throw new Error(`Semantic index state is invalid: ${loadedState.errors.join("; ")}`);

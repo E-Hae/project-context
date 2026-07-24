@@ -210,7 +210,7 @@ C# adapter tarball includes its worker and Microsoft third-party notices.
 
 ## Migration from 0.3.x
 
-Upgrade the core to `project-context-mcp@1.0.2`. If you used C# tracing in
+Upgrade the core to `project-context-mcp@1.0.3`. If you used C# tracing in
 0.3.x, install `project-context-mcp-csharp@1.0.0` and ensure .NET 8 is
 available. No project configuration change is required for the existing C#
 trace command. Core-only installations remain fully supported; only graph

@@ -103,7 +103,7 @@ async function startOllamaStub(): Promise<{
 test("CLI prints help successfully", async () => {
   const result = await runCli(["--help"], tmpdir());
 
-  assert.match(result.stdout, /project-context search/);
+  assert.match(result.stdout, /pctx search/);
   assert.equal(result.stderr, "");
 });
 
