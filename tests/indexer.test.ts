@@ -441,6 +441,63 @@ test("indexProject is incremental and removes vectors for deleted files", async 
   }
 });
 
+test("indexProject excludes semantic-only files and removes their existing vectors", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "project-context-semantic-exclude-"));
+  const stateRoot = path.join(root, "state");
+  const store = new MemoryVectorStore();
+  const configPath = path.join(root, ".project-context.yml");
+  const config = (semanticExclude: string) => [
+    "version: 1",
+    "sources:",
+    "  code: [src]",
+    "  documents: [docs]",
+    semanticExclude,
+    "services:",
+    "  ollama:",
+    "    embeddingModel: fixture-embedding",
+    "",
+  ].join("\n");
+  const dependencies = {
+    createEmbeddingProvider: () => ({
+      model: "fixture-embedding",
+      async probeDimension() { return 2; },
+      async embedDocuments(texts: string[]) { return texts.map((text) => [text.length, 1]); },
+      async embedQuery(text: string) { return [text.length, 1]; },
+    }),
+    createVectorStore: () => store,
+    now: () => new Date("2026-07-14T00:00:00.000Z"),
+    sleep: async () => {},
+  };
+  try {
+    await mkdir(path.join(root, "src"));
+    await mkdir(path.join(root, "docs"));
+    await writeFile(configPath, config(""), "utf8");
+    await writeFile(path.join(root, "src", "Searchable.cs"), "class Searchable {}\n", "utf8");
+    await writeFile(path.join(root, "src", "GraphOnly.cs"), "class GraphOnly {}\n", "utf8");
+    await writeFile(path.join(root, "docs", "GraphOnly.md"), "# Graph only\n", "utf8");
+
+    await indexProject(root, { stateRoot, dependencies });
+    assert.equal(store.entities.size, 3);
+
+    await writeFile(
+      configPath,
+      config('  semanticExclude: ["**/GraphOnly.*"]'),
+      "utf8",
+    );
+    const filtered = await indexProject(root, { stateRoot, dependencies });
+
+    assert.equal(filtered.filesSeen, 2);
+    assert.equal(filtered.filesDeleted, 1);
+    assert.equal(filtered.chunksDeleted, 1);
+    assert.deepEqual(
+      [...store.entities.values()].map((entity) => entity.path),
+      ["docs/GraphOnly.md", "src/Searchable.cs"],
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("indexProject includes registered handoffs and removes deleted handoff vectors", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "project-context-handoff-index-"));
   const stateRoot = path.join(root, "state");

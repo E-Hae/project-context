@@ -146,12 +146,34 @@ version: 1
 sources:
   code: [src]
   documents: [README.md, docs]
+  semanticExclude:
+    - "src/**/Generated/**"
 exclude:
   - node_modules/**
   - .git/**
   - "**/*.dll"
   - "**/*.keystore"
 ```
+
+### Graph-only semantic exclusions
+
+Use `sources.semanticExclude` for glob patterns that graph tracing should still
+read but semantic search must not embed. The paths must already be covered by
+`sources.code`; matching document paths are unaffected. This setting only
+removes them from the vector index and also removes any vectors that a previous
+indexing run created for them.
+
+```yaml
+sources:
+  code: [src]
+  semanticExclude:
+    - "src/Generated/**"
+    - "src/**/*.g.cs"
+```
+
+Exact search and `context_read` retain their existing source policy. Add a path
+to the top-level `exclude` list instead when it must be unavailable to every
+search and read route, including graph tracing.
 
 ### Semantic search services
 

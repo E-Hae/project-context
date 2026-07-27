@@ -37,7 +37,7 @@ import {
   type VectorEntity,
 } from "./vector-store.js";
 import { resolveProjectRoot } from "./project-path.js";
-import { resolveSourceTargets } from "./source-policy.js";
+import { isExcluded, resolveSourceTargets } from "./source-policy.js";
 
 const EMBEDDING_BATCH_SIZE = 64;
 const DELETE_BATCH_SIZE = 200;
@@ -299,9 +299,14 @@ export async function indexProject(
       config,
       options.handoffRoot ?? DEFAULT_HANDOFF_ROOT,
     );
-    const files = [...projectFiles, ...handoffFiles].sort((left, right) =>
-      left.relativePath.localeCompare(right.relativePath, "en"),
-    );
+    const files = [
+      ...projectFiles.filter(
+        (file) =>
+          file.source !== "code" ||
+          !isExcluded(file.relativePath, config.sources.semanticExclude),
+      ),
+      ...handoffFiles,
+    ].sort((left, right) => left.relativePath.localeCompare(right.relativePath, "en"));
     options.onProgress?.({ phase: "collect", current: files.length, total: files.length });
     const collectMs = elapsedMilliseconds(collectStartedAt, dependencies.nowMs());
 

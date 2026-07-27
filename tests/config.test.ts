@@ -19,6 +19,7 @@ test("loadProjectConfig returns defaults when the file is missing", async () => 
     assert.equal(loaded.valid, true);
     assert.deepEqual(loaded.value, DEFAULT_CONFIG);
     assert.equal(loaded.value.sources.handoff.enabled, false);
+    assert.deepEqual(loaded.value.sources.semanticExclude, []);
     assert.equal(loaded.value.services.vectorStore.backend, "local");
   } finally {
     await rm(root, { recursive: true, force: true });
@@ -34,6 +35,7 @@ test("loadProjectConfig validates and merges a project config", async () => {
         "version: 1",
         "sources:",
         "  code: [Assets/Scripts]",
+        "  semanticExclude: [Assets/Scripts/Generated/**]",
         "  handoff:",
         "    projectSlug: example-project",
         "exclude: [Library/**]",
@@ -56,6 +58,7 @@ test("loadProjectConfig validates and merges a project config", async () => {
     assert.equal(loaded.exists, true);
     assert.equal(loaded.valid, true);
     assert.deepEqual(loaded.value.sources.code, ["Assets/Scripts"]);
+    assert.deepEqual(loaded.value.sources.semanticExclude, ["Assets/Scripts/Generated/**"]);
     assert.equal(loaded.value.sources.handoff.projectSlug, "example-project");
     assert.equal(loaded.value.services.milvus.address, "localhost:19530");
     assert.equal(loaded.value.services.vectorStore.backend, "milvus");

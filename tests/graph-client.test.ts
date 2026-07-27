@@ -49,6 +49,7 @@ test("traceProject bounds adapter input and re-reads source evidence", async () 
     await mkdir(path.join(root, "src"));
     await writeFile(path.join(root, ".project-context.yml"), [
       "version: 1", "sources:", "  code: [src]", "  documents: []",
+      "  semanticExclude: [src/Caller.cs]",
       "exclude: [src/Excluded.cs]", "",
     ].join("\n"), "utf8");
     const featurePath = path.join(root, "src", "Feature.cs");

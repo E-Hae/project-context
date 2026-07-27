@@ -26,6 +26,7 @@ export interface ProjectContextConfig {
   sources: {
     code: string[];
     documents: string[];
+    semanticExclude: string[];
     handoff: {
       enabled: boolean;
       projectSlug: string | null;
@@ -62,6 +63,7 @@ export const DEFAULT_CONFIG: ProjectContextConfig = {
   sources: {
     code: ["."],
     documents: ["README.md", "docs"],
+    semanticExclude: [],
     handoff: {
       enabled: false,
       projectSlug: null,
@@ -100,6 +102,7 @@ const rawConfigSchema = z
       .object({
         code: z.array(z.string().min(1).max(512)).max(128).optional(),
         documents: z.array(z.string().min(1).max(512)).max(128).optional(),
+        semanticExclude: z.array(z.string().min(1).max(512)).max(256).optional(),
         handoff: z
           .object({
             enabled: z.boolean().optional(),
@@ -172,6 +175,8 @@ function mergeConfig(raw: z.infer<typeof rawConfigSchema>): ProjectContextConfig
     sources: {
       code: raw.sources?.code ?? DEFAULT_CONFIG.sources.code,
       documents: raw.sources?.documents ?? DEFAULT_CONFIG.sources.documents,
+      semanticExclude:
+        raw.sources?.semanticExclude ?? DEFAULT_CONFIG.sources.semanticExclude,
       handoff: {
         enabled:
           raw.sources?.handoff?.enabled ?? DEFAULT_CONFIG.sources.handoff.enabled,
