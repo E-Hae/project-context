@@ -73,6 +73,18 @@ test("CLI prints help successfully", async () => {
   assert.equal(result.stderr, "");
 });
 
+test("CLI prints the package version", async () => {
+  const packageJson = JSON.parse(
+    await readFile(fileURLToPath(new URL("../../package.json", import.meta.url)), "utf8"),
+  ) as { version: string };
+
+  for (const option of ["--version", "-v"]) {
+    const result = await runCli([option], tmpdir());
+    assert.equal(result.stdout, `${packageJson.version}\n`);
+    assert.equal(result.stderr, "");
+  }
+});
+
 test("CLI saves and appends handoffs without an MCP client", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "project-context-cli-"));
   const projectRoot = path.join(root, "AutomationProject");

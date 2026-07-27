@@ -5,15 +5,15 @@ import path from "node:path";
 import test from "node:test";
 
 import { readProjectDocument } from "../src/document-store.js";
+import { writeProjectConfig } from "./project-config-fixture.js";
 
 test("readProjectDocument reads an exact configured line range", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "project-context-read-"));
   try {
     await mkdir(path.join(root, "src", "generated"), { recursive: true });
-    await writeFile(
-      path.join(root, ".project-context.yml"),
+    await writeProjectConfig(
+      root,
       "version: 1\nsources:\n  code: [src]\n  documents: []\nexclude:\n  - src/generated/**\n",
-      "utf8",
     );
     await writeFile(
       path.join(root, "src", "Feature.cs"),

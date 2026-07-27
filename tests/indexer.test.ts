@@ -10,6 +10,7 @@ import type {
   IndexableFileRead,
 } from "../src/file-collector.js";
 import { indexProject } from "../src/indexer.js";
+import { writeProjectConfig } from "./project-config-fixture.js";
 import type {
   ProjectContextVectorStore,
   VectorEntity,
@@ -87,10 +88,9 @@ async function writeProjectFixture(
   files: Array<{ name: string; text: string }>,
 ): Promise<void> {
   await mkdir(path.join(root, "src"));
-  await writeFile(
-    path.join(root, ".project-context.yml"),
+  await writeProjectConfig(
+    root,
     "version: 1\nsources:\n  code: [src]\n  documents: []\n  handoff:\n    enabled: false\nservices:\n  ollama:\n    embeddingModel: fixture-embedding\n",
-    "utf8",
   );
   await Promise.all(
     files.map(({ name, text }) => writeFile(path.join(root, "src", name), text, "utf8")),
@@ -378,10 +378,9 @@ test("indexProject is incremental and removes vectors for deleted files", async 
   const store = new MemoryVectorStore();
   try {
     await mkdir(path.join(root, "src"));
-    await writeFile(
-      path.join(root, ".project-context.yml"),
+    await writeProjectConfig(
+      root,
       "version: 1\nsources:\n  code: [src]\n  documents: []\n  handoff:\n    enabled: false\nservices:\n  ollama:\n    embeddingModel: fixture-embedding\n",
-      "utf8",
     );
     const sourcePath = path.join(root, "src", "Feature.cs");
     await writeFile(sourcePath, "public class Feature {}\n", "utf8");
@@ -445,7 +444,6 @@ test("indexProject excludes semantic-only files and removes their existing vecto
   const root = await mkdtemp(path.join(tmpdir(), "project-context-semantic-exclude-"));
   const stateRoot = path.join(root, "state");
   const store = new MemoryVectorStore();
-  const configPath = path.join(root, ".project-context.yml");
   const config = (semanticExclude: string) => [
     "version: 1",
     "sources:",
@@ -471,7 +469,7 @@ test("indexProject excludes semantic-only files and removes their existing vecto
   try {
     await mkdir(path.join(root, "src"));
     await mkdir(path.join(root, "docs"));
-    await writeFile(configPath, config(""), "utf8");
+    await writeProjectConfig(root, config(""));
     await writeFile(path.join(root, "src", "Searchable.cs"), "class Searchable {}\n", "utf8");
     await writeFile(path.join(root, "src", "GraphOnly.cs"), "class GraphOnly {}\n", "utf8");
     await writeFile(path.join(root, "docs", "GraphOnly.md"), "# Graph only\n", "utf8");
@@ -479,11 +477,7 @@ test("indexProject excludes semantic-only files and removes their existing vecto
     await indexProject(root, { stateRoot, dependencies });
     assert.equal(store.entities.size, 3);
 
-    await writeFile(
-      configPath,
-      config('  semanticExclude: ["**/GraphOnly.*"]'),
-      "utf8",
-    );
+    await writeProjectConfig(root, config('  semanticExclude: ["**/GraphOnly.*"]'));
     const filtered = await indexProject(root, { stateRoot, dependencies });
 
     assert.equal(filtered.filesSeen, 2);
@@ -507,10 +501,9 @@ test("indexProject includes registered handoffs and removes deleted handoff vect
   try {
     await mkdir(path.join(root, "src"));
     await mkdir(handoffProject, { recursive: true });
-    await writeFile(
-      path.join(root, ".project-context.yml"),
+    await writeProjectConfig(
+      root,
       "version: 1\nsources:\n  code: [src]\n  documents: []\n  handoff:\n    enabled: true\n    projectSlug: fixture-project\nservices:\n  ollama:\n    embeddingModel: fixture-embedding\n",
-      "utf8",
     );
     await writeFile(
       path.join(root, "src", "Feature.cs"),

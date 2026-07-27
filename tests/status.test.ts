@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { loadProjectConfig, PROJECT_CONFIG_FILENAME } from "../src/config.js";
+import { loadProjectConfig } from "../src/config.js";
 import {
   deriveProjectIndexIdentity,
   saveProjectIndexState,
@@ -14,6 +14,7 @@ import {
   type StatusDependencies,
 } from "../src/status.js";
 import { LocalVectorStore } from "../src/local-vector-store.js";
+import { writeProjectConfig } from "./project-config-fixture.js";
 
 test("collectProjectStatus returns unavailable for a missing project", async () => {
   const status = await collectProjectStatus(
@@ -32,8 +33,8 @@ test("collectProjectStatus does not degrade when no trace adapter is installed",
   const stateRoot = path.join(root, "state");
 
   try {
-    await writeFile(
-      path.join(root, PROJECT_CONFIG_FILENAME),
+    await writeProjectConfig(
+      root,
       [
         "version: 1",
         "sources:",
@@ -47,7 +48,6 @@ test("collectProjectStatus does not degrade when no trace adapter is installed",
         "    url: http://localhost:11434/ollama",
         "",
       ].join("\n"),
-      "utf8",
     );
     const config = (await loadProjectConfig(root)).value;
     const identity = deriveProjectIndexIdentity(root, config);
@@ -202,7 +202,7 @@ test("collectProjectStatus does not degrade when no trace adapter is installed",
 test("collectProjectStatus reports a malformed trace probe as unavailable", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "project-context-status-"));
   try {
-    await writeFile(path.join(root, PROJECT_CONFIG_FILENAME), "version: 1\n", "utf8");
+    await writeProjectConfig(root, "version: 1\n");
     const status = await collectProjectStatus(root, {
       dependencies: {
         runCommand: async (command, args) => {
@@ -240,7 +240,7 @@ test("collectProjectStatus reports a malformed trace probe as unavailable", asyn
 test("collectProjectStatus does not probe Milvus when the local vector store is selected", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "project-context-status-"));
   try {
-    await writeFile(path.join(root, PROJECT_CONFIG_FILENAME), "version: 1\n", "utf8");
+    await writeProjectConfig(root, "version: 1\n");
     let probeCalls = 0;
     const status = await collectProjectStatus(root, {
       dependencies: {
@@ -281,7 +281,7 @@ test("collectProjectStatus invalidates a local index whose collection is missing
   const root = await mkdtemp(path.join(tmpdir(), "project-context-status-"));
   const stateRoot = path.join(root, "state");
   try {
-    await writeFile(path.join(root, PROJECT_CONFIG_FILENAME), "version: 1\n", "utf8");
+    await writeProjectConfig(root, "version: 1\n");
     const config = (await loadProjectConfig(root)).value;
     const identity = deriveProjectIndexIdentity(root, config);
     await saveProjectIndexState(
@@ -347,7 +347,7 @@ test("collectProjectStatus degrades when Git metadata is unavailable", async () 
   const packageRoot = path.join(root, "package");
 
   try {
-    await writeFile(path.join(root, PROJECT_CONFIG_FILENAME), "version: 1\n", "utf8");
+    await writeProjectConfig(root, "version: 1\n");
     await mkdir(path.join(handoffRoot, "fixture"), { recursive: true });
     await writeFile(
       path.join(handoffRoot, "fixture", ".project-path"),

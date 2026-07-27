@@ -8,6 +8,7 @@ import { LocalVectorStore } from "../src/local-vector-store.js";
 import { indexProject } from "../src/indexer.js";
 import { searchSemantic } from "../src/semantic-search.js";
 import type { VectorEntity } from "../src/vector-store.js";
+import { writeProjectConfig } from "./project-config-fixture.js";
 
 function entity(id: string, embedding: number[]): VectorEntity {
   return {
@@ -73,8 +74,8 @@ test("indexProject and searchSemantic use the local vector store by default", as
   const stateRoot = path.join(root, "state");
   try {
     await mkdir(path.join(root, "src"), { recursive: true });
-    await writeFile(
-      path.join(root, ".project-context.yml"),
+    await writeProjectConfig(
+      root,
       [
         "version: 1",
         "sources:",
@@ -85,7 +86,6 @@ test("indexProject and searchSemantic use the local vector store by default", as
         "    embeddingModel: fixture-embedding",
         "",
       ].join("\n"),
-      "utf8",
     );
     await writeFile(
       path.join(root, "src", "Feature.cs"),

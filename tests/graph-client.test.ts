@@ -16,6 +16,7 @@ import type {
   TraceAdapterResponse,
 } from "../src/trace-adapter.js";
 import { TraceAdapterUnavailableError } from "../src/trace-adapter-resolver.js";
+import { writeProjectConfig } from "./project-config-fixture.js";
 
 const diagnostics = {
   filesRequested: 2, filesLoaded: 2, filesSkipped: 0,
@@ -47,11 +48,11 @@ test("traceProject bounds adapter input and re-reads source evidence", async () 
   const root = await mkdtemp(path.join(tmpdir(), "project-context-graph-"));
   try {
     await mkdir(path.join(root, "src"));
-    await writeFile(path.join(root, ".project-context.yml"), [
+    await writeProjectConfig(root, [
       "version: 1", "sources:", "  code: [src]", "  documents: []",
       "  semanticExclude: [src/Caller.cs]",
       "exclude: [src/Excluded.cs]", "",
-    ].join("\n"), "utf8");
+    ].join("\n"));
     const featurePath = path.join(root, "src", "Feature.cs");
     const callerPath = path.join(root, "src", "Caller.cs");
     await writeFile(featurePath, "class Feature { public void Target() {} }\n", "utf8");
@@ -94,7 +95,7 @@ test("traceProject rejects stale and escaping adapter evidence", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "project-context-graph-"));
   try {
     await mkdir(path.join(root, "src"));
-    await writeFile(path.join(root, ".project-context.yml"), "version: 1\nsources:\n  code: [src]\n  documents: []\n", "utf8");
+    await writeProjectConfig(root, "version: 1\nsources:\n  code: [src]\n  documents: []\n");
     const sourcePath = path.join(root, "src", "Feature.cs");
     await writeFile(sourcePath, "class Feature { void Target() {} }\n", "utf8");
     const originalHash = createHash("sha256").update(await readFile(sourcePath)).digest("hex");
@@ -147,7 +148,7 @@ test("traceProject passes candidate source extensions to language-neutral adapte
   const root = await mkdtemp(path.join(tmpdir(), "project-context-graph-"));
   try {
     await mkdir(path.join(root, "src"));
-    await writeFile(path.join(root, ".project-context.yml"), "version: 1\nsources:\n  code: [src]\n  documents: []\n", "utf8");
+    await writeProjectConfig(root, "version: 1\nsources:\n  code: [src]\n  documents: []\n");
     await writeFile(path.join(root, "src", "Feature.cs"), "class Feature {}\n", "utf8");
     await writeFile(path.join(root, "src", "helper.py"), "def helper(): pass\n", "utf8");
     let sourceFileExtensions: readonly string[] | undefined;

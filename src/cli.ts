@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { readFile } from "node:fs/promises";
+import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 
@@ -11,7 +12,11 @@ import { analyzeProjectImpact } from "./impact-client.js";
 import { searchProject, type SearchMode } from "./hybrid-search.js";
 import { indexProject } from "./indexer.js";
 import { serveMcp } from "./mcp-server.js";
-import { packageRootFromCliPath, updateGlobalNpmInstall } from "./npm-updater.js";
+import {
+  installedAdapterVersions,
+  packageRootFromCliPath,
+  updateGlobalNpmInstall,
+} from "./npm-updater.js";
 import { collectProjectStatus } from "./status.js";
 import { watchProject } from "./watcher.js";
 
@@ -19,6 +24,7 @@ function printUsage(stream: NodeJS.WriteStream = process.stderr): void {
   stream.write(
     [
       "Usage:",
+      "  pctx --version",
       "  pctx index <project-root> [--rebuild]",
       "  pctx watch <project-root> [interval-ms]",
       "  pctx status [project-root]",
@@ -45,6 +51,16 @@ async function readStandardInput(): Promise<string> {
     process.stdin.once("end", () => resolve(content));
     process.stdin.once("error", reject);
   });
+}
+
+async function readPackageVersion(packageRoot: string): Promise<string> {
+  const packageJson = JSON.parse(
+    await readFile(path.join(packageRoot, "package.json"), "utf8"),
+  ) as { version: unknown };
+  if (typeof packageJson.version !== "string") {
+    throw new Error("package.json does not contain a version string");
+  }
+  return packageJson.version;
 }
 
 async function readHandoffContent(
@@ -98,6 +114,20 @@ async function main(args: string[]): Promise<number> {
 
   if ((command === "--help" || command === "-h") && rest.length === 0) {
     printUsage(process.stdout);
+    return 0;
+  }
+
+  if ((command === "--version" || command === "-v") && rest.length === 0) {
+    const packageRoot = packageRootFromCliPath(fileURLToPath(import.meta.url));
+    const [version, adapters] = await Promise.all([
+      readPackageVersion(packageRoot),
+      installedAdapterVersions(packageRoot),
+    ]);
+    process.stdout.write([
+      version,
+      ...adapters.map(({ packageName, version }) => `${packageName} ${version}`),
+      "",
+    ].join("\n"));
     return 0;
   }
 

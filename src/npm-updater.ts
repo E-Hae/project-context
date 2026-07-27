@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { stat } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 
 import { configuredTraceAdapterNames } from "./trace-adapter-resolver.js";
@@ -8,6 +8,11 @@ import { configuredImpactAdapterNames } from "./impact-adapter-resolver.js";
 export interface NpmUpdateResult {
   updated: boolean;
   message: string;
+}
+
+export interface InstalledAdapterVersion {
+  packageName: string;
+  version: string;
 }
 
 interface NpmCommandResult {
@@ -24,6 +29,12 @@ interface NpmUpdaterDependencies {
 function pathKey(value: string): string {
   const normalized = path.normalize(value).replace(/[\\/]+$/, "");
   return process.platform === "win32" ? normalized.toLowerCase() : normalized;
+}
+
+function configuredAdapterPackageNames(): string[] {
+  return [
+    ...new Set([...configuredTraceAdapterNames(), ...configuredImpactAdapterNames()]),
+  ];
 }
 
 export function packageRootFromCliPath(cliPath: string): string {
@@ -67,11 +78,41 @@ async function isPackageInstalled(
   }
 }
 
+async function readInstalledPackageVersion(
+  nodeModulesRoot: string,
+  packageName: string,
+): Promise<InstalledAdapterVersion | null> {
+  try {
+    const packageJson = JSON.parse(
+      await readFile(
+        path.join(nodeModulesRoot, ...packageName.split("/"), "package.json"),
+        "utf8",
+      ),
+    ) as { version?: unknown };
+    return typeof packageJson.version === "string"
+      ? { packageName, version: packageJson.version }
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function installedAdapterVersions(
+  currentPackageRoot: string,
+  packageNames: readonly string[] = configuredAdapterPackageNames(),
+): Promise<InstalledAdapterVersion[]> {
+  const nodeModulesRoot = path.dirname(currentPackageRoot);
+  const versions = await Promise.all(
+    [...new Set(packageNames)]
+      .filter((packageName) => packageName !== "project-context-mcp")
+      .map((packageName) => readInstalledPackageVersion(nodeModulesRoot, packageName)),
+  );
+  return versions.filter((version): version is InstalledAdapterVersion => version !== null);
+}
+
 const DEFAULT_DEPENDENCIES: NpmUpdaterDependencies = {
   runNpm,
-  getTraceAdapterPackageNames: () => [
-    ...new Set([...configuredTraceAdapterNames(), ...configuredImpactAdapterNames()]),
-  ],
+  getTraceAdapterPackageNames: configuredAdapterPackageNames,
   isPackageInstalled,
 };
 const GLOBAL_INSTALL_REQUIRED_MESSAGE =
@@ -111,7 +152,7 @@ export async function updateGlobalNpmInstall(
       ),
   )).filter((packageName): packageName is string => packageName !== null);
   const coreUpdate = await deps.runNpm(
-    ["install", "--global", "project-context-mcp@latest"],
+    ["install", "--global", "--prefer-online", "project-context-mcp@latest"],
     true,
   );
   if (coreUpdate.exitCode !== 0) {
@@ -126,7 +167,12 @@ export async function updateGlobalNpmInstall(
   }
 
   const adapterUpdate = await deps.runNpm(
-    ["install", "--global", ...installedAdapters.map((packageName) => `${packageName}@latest`)],
+    [
+      "install",
+      "--global",
+      "--prefer-online",
+      ...installedAdapters.map((packageName) => `${packageName}@latest`),
+    ],
     true,
   );
   if (adapterUpdate.exitCode !== 0) {

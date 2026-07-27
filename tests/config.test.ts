@@ -7,16 +7,20 @@ import test from "node:test";
 import {
   DEFAULT_CONFIG,
   PROJECT_CONFIG_FILENAME,
+  PROJECT_CONFIG_RELATIVE_PATH,
   loadProjectConfig,
 } from "../src/config.js";
+import { writeProjectConfig } from "./project-config-fixture.js";
 
-test("loadProjectConfig returns defaults when the file is missing", async () => {
+test("loadProjectConfig ignores a root-level config file", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "project-context-config-"));
   try {
+    await writeFile(path.join(root, PROJECT_CONFIG_FILENAME), "version: 1\n", "utf8");
     const loaded = await loadProjectConfig(root);
 
     assert.equal(loaded.exists, false);
     assert.equal(loaded.valid, true);
+    assert.equal(loaded.path, path.join(root, PROJECT_CONFIG_RELATIVE_PATH));
     assert.deepEqual(loaded.value, DEFAULT_CONFIG);
     assert.equal(loaded.value.sources.handoff.enabled, false);
     assert.deepEqual(loaded.value.sources.semanticExclude, []);
@@ -29,8 +33,8 @@ test("loadProjectConfig returns defaults when the file is missing", async () => 
 test("loadProjectConfig validates and merges a project config", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "project-context-config-"));
   try {
-    await writeFile(
-      path.join(root, PROJECT_CONFIG_FILENAME),
+    await writeProjectConfig(
+      root,
       [
         "version: 1",
         "sources:",
@@ -50,7 +54,6 @@ test("loadProjectConfig validates and merges a project config", async () => {
         "    historyLimit: 500",
         "",
       ].join("\n"),
-      "utf8",
     );
 
     const loaded = await loadProjectConfig(root);
@@ -75,10 +78,9 @@ test("loadProjectConfig validates and merges a project config", async () => {
 test("loadProjectConfig rejects the removed answerModel setting", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "project-context-config-"));
   try {
-    await writeFile(
-      path.join(root, PROJECT_CONFIG_FILENAME),
+    await writeProjectConfig(
+      root,
       "version: 1\nservices:\n  ollama:\n    answerModel: obsolete\n",
-      "utf8",
     );
 
     const loaded = await loadProjectConfig(root);
@@ -93,8 +95,8 @@ test("loadProjectConfig rejects the removed answerModel setting", async () => {
 test("loadProjectConfig gives an explicit vector-store backend precedence", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "project-context-config-"));
   try {
-    await writeFile(
-      path.join(root, PROJECT_CONFIG_FILENAME),
+    await writeProjectConfig(
+      root,
       [
         "version: 1",
         "services:",
@@ -104,7 +106,6 @@ test("loadProjectConfig gives an explicit vector-store backend precedence", asyn
         "    backend: local",
         "",
       ].join("\n"),
-      "utf8",
     );
 
     const loaded = await loadProjectConfig(root);
@@ -119,10 +120,9 @@ test("loadProjectConfig gives an explicit vector-store backend precedence", asyn
 test("loadProjectConfig reports unknown keys without throwing", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "project-context-config-"));
   try {
-    await writeFile(
-      path.join(root, PROJECT_CONFIG_FILENAME),
+    await writeProjectConfig(
+      root,
       "version: 1\nunknown: true\n",
-      "utf8",
     );
 
     const loaded = await loadProjectConfig(root);

@@ -17,6 +17,7 @@ import type {
   VectorSearchHit,
 } from "../src/milvus-rest-client.js";
 import { searchSemantic } from "../src/semantic-search.js";
+import { writeProjectConfig } from "./project-config-fixture.js";
 
 test("searchSemantic returns one fresh evidence result per file", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "project-context-semantic-"));
@@ -24,10 +25,9 @@ test("searchSemantic returns one fresh evidence result per file", async () => {
   try {
     await mkdir(path.join(root, "src"));
     await mkdir(path.join(root, "docs"));
-    await writeFile(
-      path.join(root, ".project-context.yml"),
+    await writeProjectConfig(
+      root,
       "version: 1\nsources:\n  code: [src]\n  documents: [docs]\nservices:\n  ollama:\n    embeddingModel: fixture-embedding\n",
-      "utf8",
     );
     const codePath = path.join(root, "src", "Feature.cs");
     const docsPath = path.join(root, "docs", "design.md");
@@ -180,10 +180,9 @@ test("searchSemantic validates handoff evidence from the Markdown source", async
   try {
     await mkdir(path.join(root, "src"));
     await mkdir(handoffProject, { recursive: true });
-    await writeFile(
-      path.join(root, ".project-context.yml"),
+    await writeProjectConfig(
+      root,
       "version: 1\nsources:\n  code: [src]\n  documents: []\n  handoff:\n    enabled: true\n    projectSlug: fixture-project\nservices:\n  ollama:\n    embeddingModel: fixture-embedding\n",
-      "utf8",
     );
     await writeFile(
       path.join(handoffProject, ".project-path"),

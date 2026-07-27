@@ -9,6 +9,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 
 import { createProjectContextServer } from "../src/mcp-server.js";
 import { GraphTraceError } from "../src/graph-client.js";
+import { writeProjectConfig } from "./project-config-fixture.js";
 
 test("context_status is exposed through MCP and returns structured content", async () => {
   const projectRoot = await mkdtemp(path.join(tmpdir(), "project-context-mcp-"));
@@ -16,10 +17,9 @@ test("context_status is exposed through MCP and returns structured content", asy
   const handoffProject = path.join(handoffRoot, "fixture-project");
   await mkdir(path.join(projectRoot, "src"));
   await mkdir(handoffProject, { recursive: true });
-  await writeFile(
-    path.join(projectRoot, ".project-context.yml"),
+  await writeProjectConfig(
+    projectRoot,
     "version: 1\nsources:\n  code: [src]\n  documents: []\n  handoff:\n    enabled: false\n",
-    "utf8",
   );
   await writeFile(
     path.join(projectRoot, "src", "Example.cs"),

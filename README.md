@@ -30,6 +30,7 @@ Install the CLI globally:
 ```sh
 npm install --global project-context-mcp
 pctx --help
+pctx --version # core and installed adapter versions
 ```
 
 `pctx` is the short CLI alias. `project-context-mcp` remains available as the
@@ -56,8 +57,8 @@ npm install --global project-context-mcp-unity
 npm install --global project-context-mcp-git
 ```
 
-Then add a `.project-context.yml` file to the project you want to inspect and
-run a status check:
+Then add a `.project-context/config.yml` file to the project you want
+to inspect and run a status check:
 
 ```sh
 pctx status /path/to/project
@@ -136,8 +137,8 @@ language when another adapter also matches the project.
 
 ## Project configuration
 
-Configuration is optional. Create `.project-context.yml` in the target project
-root when you want to narrow the indexed sources or add project-specific
+Configuration is optional. Create `.project-context/config.yml` in the
+target project when you want to narrow the indexed sources or add project-specific
 exclusions. The example below contains only project-owned paths; it does not
 include a user home directory, account, token, or machine-specific setting.
 

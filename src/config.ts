@@ -6,7 +6,12 @@ import { z } from "zod/v4";
 
 import type { VectorStoreBackend } from "./vector-store.js";
 
-export const PROJECT_CONFIG_FILENAME = ".project-context.yml";
+export const PROJECT_CONFIG_DIRECTORY = ".project-context";
+export const PROJECT_CONFIG_FILENAME = "config.yml";
+export const PROJECT_CONFIG_RELATIVE_PATH = path.join(
+  PROJECT_CONFIG_DIRECTORY,
+  PROJECT_CONFIG_FILENAME,
+);
 
 const DEFAULT_EXCLUDES = [
   ".git/**",
@@ -236,7 +241,7 @@ function formatZodErrors(error: z.ZodError): string[] {
 export async function loadProjectConfig(
   projectRoot: string,
 ): Promise<LoadedProjectConfig> {
-  const configPath = path.join(projectRoot, PROJECT_CONFIG_FILENAME);
+  const configPath = path.join(projectRoot, PROJECT_CONFIG_RELATIVE_PATH);
 
   let source: string;
   try {

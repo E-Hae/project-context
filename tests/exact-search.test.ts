@@ -5,13 +5,14 @@ import path from "node:path";
 import test from "node:test";
 
 import { searchExact } from "../src/exact-search.js";
+import { writeProjectConfig } from "./project-config-fixture.js";
 
 async function createFixture(): Promise<string> {
   const root = await mkdtemp(path.join(tmpdir(), "project-context-search-"));
   await mkdir(path.join(root, "src", "generated"), { recursive: true });
   await mkdir(path.join(root, "docs"), { recursive: true });
-  await writeFile(
-    path.join(root, ".project-context.yml"),
+  await writeProjectConfig(
+    root,
     [
       "version: 1",
       "sources:",
@@ -23,7 +24,6 @@ async function createFixture(): Promise<string> {
       "  - src/generated/**",
       "",
     ].join("\n"),
-    "utf8",
   );
   await writeFile(
     path.join(root, "src", "Feature.cs"),
@@ -119,10 +119,9 @@ test("searchExact de-duplicates evidence from overlapping source roots", async (
   const root = await mkdtemp(path.join(tmpdir(), "project-context-search-"));
   try {
     await mkdir(path.join(root, "src", "nested"), { recursive: true });
-    await writeFile(
-      path.join(root, ".project-context.yml"),
+    await writeProjectConfig(
+      root,
       "version: 1\nsources:\n  code: [src, src/nested]\n  documents: []\n",
-      "utf8",
     );
     await writeFile(
       path.join(root, "src", "nested", "Feature.cs"),
@@ -147,10 +146,9 @@ test("searchExact requires project config and rejects escaping source paths", as
       searchExact({ projectPath: root, query: "Needle" }),
       /Project config not found/,
     );
-    await writeFile(
-      path.join(root, ".project-context.yml"),
+    await writeProjectConfig(
+      root,
       "version: 1\nsources:\n  code: [../]\n",
-      "utf8",
     );
     await assert.rejects(
       searchExact({ projectPath: root, query: "Needle" }),

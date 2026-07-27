@@ -1,8 +1,11 @@
 import assert from "node:assert/strict";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 
 import {
+  installedAdapterVersions,
   packageRootFromCliPath,
   updateGlobalNpmInstall,
 } from "../src/npm-updater.js";
@@ -17,6 +20,48 @@ test("packageRootFromCliPath resolves the compiled CLI back to its package root"
   const cliPath = path.join(packageRoot, "dist", "src", "cli.js");
 
   assert.equal(packageRootFromCliPath(cliPath), packageRoot);
+});
+
+test("installedAdapterVersions returns versions for installed configured adapters", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "project-context-adapter-versions-"));
+  const nodeModulesRoot = path.join(root, "node_modules");
+  const packageRoot = path.join(nodeModulesRoot, "project-context-mcp");
+  try {
+    await mkdir(path.join(nodeModulesRoot, "project-context-mcp-csharp"), {
+      recursive: true,
+    });
+    await mkdir(path.join(nodeModulesRoot, "@fixture", "adapter"), { recursive: true });
+    await mkdir(path.join(nodeModulesRoot, "invalid-adapter"), { recursive: true });
+    await writeFile(
+      path.join(nodeModulesRoot, "project-context-mcp-csharp", "package.json"),
+      '{"version":"1.2.3"}\n',
+      "utf8",
+    );
+    await writeFile(
+      path.join(nodeModulesRoot, "@fixture", "adapter", "package.json"),
+      '{"version":"4.5.6"}\n',
+      "utf8",
+    );
+    await writeFile(
+      path.join(nodeModulesRoot, "invalid-adapter", "package.json"),
+      "not valid JSON\n",
+      "utf8",
+    );
+
+    const versions = await installedAdapterVersions(packageRoot, [
+      "project-context-mcp-csharp",
+      "missing-adapter",
+      "@fixture/adapter",
+      "invalid-adapter",
+    ]);
+
+    assert.deepEqual(versions, [
+      { packageName: "project-context-mcp-csharp", version: "1.2.3" },
+      { packageName: "@fixture/adapter", version: "4.5.6" },
+    ]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("updateGlobalNpmInstall updates a matching global npm installation", async () => {
@@ -37,7 +82,7 @@ test("updateGlobalNpmInstall updates a matching global npm installation", async 
   assert.deepEqual(calls, [
     { args: ["root", "--global"], inheritOutput: false },
     {
-      args: ["install", "--global", "project-context-mcp@latest"],
+      args: ["install", "--global", "--prefer-online", "project-context-mcp@latest"],
       inheritOutput: true,
     },
   ]);
@@ -65,6 +110,7 @@ test("updateGlobalNpmInstall includes installed trace adapters", async () => {
       args: [
         "install",
         "--global",
+        "--prefer-online",
         "project-context-mcp@latest",
       ],
       inheritOutput: true,
@@ -73,6 +119,7 @@ test("updateGlobalNpmInstall includes installed trace adapters", async () => {
       args: [
         "install",
         "--global",
+        "--prefer-online",
         "project-context-mcp-csharp@latest",
         "project-context-mcp-typescript@latest",
       ],
@@ -100,8 +147,8 @@ test("updateGlobalNpmInstall reports partial failure when adapters cannot update
   assert.match(result.message, /adapter update failed/);
   assert.deepEqual(calls, [
     ["root", "--global"],
-    ["install", "--global", "project-context-mcp@latest"],
-    ["install", "--global", "project-context-mcp-csharp@latest"],
+    ["install", "--global", "--prefer-online", "project-context-mcp@latest"],
+    ["install", "--global", "--prefer-online", "project-context-mcp-csharp@latest"],
   ]);
 });
 
