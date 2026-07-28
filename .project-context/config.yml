@@ -9,6 +9,9 @@ sources:
     - README.md
     - LICENSE
     - THIRD_PARTY_NOTICES.md
+  handoff:
+    enabled: true
+    projectSlug: project-context
 
 exclude:
   - .git/**
