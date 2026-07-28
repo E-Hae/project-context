@@ -82,13 +82,14 @@ export function createProjectContextServer(
     {
       title: "Project context search",
       description:
-        "Searches configured project context with explicit exact, graph, or semantic routing, or a bounded auto route with one empty-result fallback.",
+        "Searches configured project context with explicit exact, graph, or semantic routing, or a bounded auto route with one empty-result fallback. Graph routing accepts an optional trace-adapter language.",
       inputSchema: {
         projectPath: z.string().min(1).describe("Absolute or relative project path"),
         query: z.string().min(1).max(2_048).describe("Text or question to search for"),
         mode: z.enum(["auto", "exact", "graph", "semantic"]).default("auto"),
         scope: z.enum(["all", "code", "documents"]).default("all"),
         maxResults: z.number().int().min(1).max(200).default(50),
+        language: z.string().min(1).max(128).optional().describe("Trace adapter language for graph routing"),
       },
       annotations: {
         readOnlyHint: true,
@@ -97,7 +98,7 @@ export function createProjectContextServer(
         openWorldHint: false,
       },
     },
-    async ({ projectPath, query, mode, scope, maxResults }) => {
+    async ({ projectPath, query, mode, scope, maxResults, language }) => {
       try {
         const result = await (options.search ?? searchProject)({
           projectPath,
@@ -105,6 +106,7 @@ export function createProjectContextServer(
           mode,
           scope,
           maxResults,
+          ...(language === undefined ? {} : { language }),
         });
         return {
           content: [{ type: "text", text: JSON.stringify(result, null, 2) }],

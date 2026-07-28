@@ -168,3 +168,52 @@ test("traceProject passes candidate source extensions to language-neutral adapte
     assert.deepEqual(sourceFileExtensions, [".cs", ".py"]);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
+
+test("traceProject prioritizes target paths and explicit extension hints", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "project-context-graph-"));
+  try {
+    await mkdir(path.join(root, "src"));
+    await writeProjectConfig(root, "version: 1\nsources:\n  code: [src]\n  documents: []\n");
+    await writeFile(path.join(root, "src", "Feature.cs"), "class Feature {}\n", "utf8");
+    await writeFile(path.join(root, "src", "View.prefab"), "%YAML 1.1\n", "utf8");
+    await writeFile(path.join(root, "src", "helper.py"), "def helper(): pass\n", "utf8");
+    const selections: Array<readonly string[] | undefined> = [];
+    const resolveAdapter = async (selection?: {
+      language?: string;
+      sourceFileExtensions?: readonly string[];
+    }) => {
+      selections.push(selection?.sourceFileExtensions);
+      return adapter(async (request) => ({
+        workerVersion: "fixture",
+        symbol: request.symbol,
+        direction: request.direction,
+        matchedSymbols: [],
+        results: [],
+        truncated: false,
+        diagnostics: { ...diagnostics, filesRequested: 1, filesLoaded: 1 },
+      }));
+    };
+
+    await traceProject(
+      {
+        projectPath: root,
+        symbol: "src/View.prefab",
+        direction: "callees",
+      },
+      { resolveAdapter },
+    );
+    await traceProject(
+      {
+        projectPath: root,
+        symbol: "Feature.Target",
+        direction: "callers",
+        sourceFileExtensions: [".cs"],
+      },
+      { resolveAdapter },
+    );
+
+    assert.deepEqual(selections, [[".prefab"], [".cs"]]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});

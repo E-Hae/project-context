@@ -68,6 +68,15 @@ export interface TraceProjectOptions {
   }) => Promise<TraceAdapter>;
 }
 
+export interface TraceProjectInput {
+  projectPath: string;
+  symbol: string;
+  direction: TraceDirection;
+  maxResults?: number;
+  language?: string;
+  sourceFileExtensions?: readonly string[];
+}
+
 export class GraphTraceError extends Error {
   constructor(
     message: string,
@@ -282,14 +291,37 @@ function adapterErrorDetails(
     : null;
 }
 
+function normalizedSourceExtensions(values: readonly string[]): string[] {
+  return [...new Set(values
+    .map((value) => value.trim().toLocaleLowerCase("en-US"))
+    .filter((value) => /^\.[a-z0-9][a-z0-9+_-]*$/u.test(value)))];
+}
+
+function sourceExtensionsForTarget(
+  symbol: string,
+  collected: readonly CollectedSourceFile[],
+): string[] {
+  const target = symbol
+    .trim()
+    .replace(/^["'`]|["'`]$/gu, "")
+    .replaceAll("\\", "/")
+    .toLocaleLowerCase("en-US");
+  if (!target.includes(".") || target.includes("(")) return [];
+  const matches = collected.filter((file) => {
+    const relativePath = file.relativePath
+      .replaceAll("\\", "/")
+      .toLocaleLowerCase("en-US");
+    return relativePath === target ||
+      relativePath.endsWith(`/${target}`) ||
+      target.endsWith(`/${relativePath}`);
+  });
+  return normalizedSourceExtensions(
+    matches.map((file) => path.extname(file.relativePath)),
+  );
+}
+
 export async function traceProject(
-  input: {
-    projectPath: string;
-    symbol: string;
-    direction: TraceDirection;
-    maxResults?: number;
-    language?: string;
-  },
+  input: TraceProjectInput,
   options: TraceProjectOptions = {},
 ): Promise<GraphTraceResult> {
   const symbol = input.symbol.trim();
@@ -320,13 +352,22 @@ export async function traceProject(
     loadedConfig.value.exclude,
     Math.min(options.timeoutMs ?? 90_000, 30_000),
   );
+  const targetSourceExtensions = sourceExtensionsForTarget(symbol, collected);
+  const hintedSourceExtensions = normalizedSourceExtensions(
+    input.sourceFileExtensions ?? [],
+  );
+  const projectSourceExtensions = normalizedSourceExtensions(
+    collected.map((file) => path.extname(file.relativePath)),
+  );
   let adapter: TraceAdapter;
   try {
     adapter = options.adapter ?? await (options.resolveAdapter ?? resolveTraceAdapter)({
       ...(input.language === undefined ? {} : { language: input.language }),
-      sourceFileExtensions: [...new Set(collected.map((file) =>
-        path.extname(file.relativePath).toLocaleLowerCase("en-US"),
-      ))],
+      sourceFileExtensions: targetSourceExtensions.length > 0
+        ? targetSourceExtensions
+        : hintedSourceExtensions.length > 0
+          ? hintedSourceExtensions
+          : projectSourceExtensions,
     });
   } catch (error) {
     if (error instanceof TraceAdapterUnavailableError) {

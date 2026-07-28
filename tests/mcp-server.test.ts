@@ -244,3 +244,42 @@ test("context_trace returns a trace language selection error to MCP callers", as
     await server.close();
   }
 });
+
+test("context_search forwards an optional graph language", async () => {
+  let receivedLanguage: string | undefined;
+  const server = createProjectContextServer({
+    search: async (input) => {
+      receivedLanguage = input.language;
+      return {
+        route: "exact",
+        fallbackUsed: false,
+        query: input.query,
+        scope: input.scope ?? "all",
+        commit: null,
+        indexedAt: null,
+        results: [],
+        truncated: false,
+      };
+    },
+  });
+  const client = new Client({ name: "project-context-test", version: "0.1.0" });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  await server.connect(serverTransport);
+  await client.connect(clientTransport);
+  try {
+    const result = await client.callTool({
+      name: "context_search",
+      arguments: {
+        projectPath: ".",
+        query: "Feature.Target 호출자",
+        mode: "graph",
+        language: "csharp",
+      },
+    });
+    assert.equal(result.isError, undefined);
+    assert.equal(receivedLanguage, "csharp");
+  } finally {
+    await client.close();
+    await server.close();
+  }
+});

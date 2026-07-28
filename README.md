@@ -126,9 +126,13 @@ project's `checkJs` and JSDoc settings; dynamic runtime dispatch can produce
 partial results.
 
 Without a compatible adapter, an explicit trace reports an installation hint.
-Automatic graph routing falls back to semantic search when tracing is unavailable
-or ambiguous. Pass an optional language after `max-results` to the CLI trace
-command, or the optional `language` field to `context_trace`.
+Automatic graph routing falls back to semantic search when the symbol is absent
+or tracing is unavailable. Adapter ambiguity stays visible instead of being
+silently replaced by semantic results. Graph search first infers an adapter from
+a concrete target path and then, when needed, from exact-search result
+extensions. Pass an optional language after `max-results` to the CLI search or
+trace command, or the optional `language` field to `context_search` or
+`context_trace`.
 
 The Unity adapter is named `project-context-mcp-unity`. Its YAML mode follows
 prefab, scene, ScriptableObject, `.meta` GUID, `.asmdef`, and `.asmref` links.
@@ -276,7 +280,7 @@ adapters:
 | `pctx status [project-root]` | Check configuration, dependencies, and index freshness. |
 | `pctx index <project-root> [--rebuild]` | Create or incrementally update the semantic index. |
 | `pctx watch <project-root> [interval-ms]` | Keep an index current with filesystem events and safety scans. |
-| `pctx search <project-root> <query> [mode] [scope] [max-results]` | Search in `auto`, `exact`, `graph`, or `semantic` mode. |
+| `pctx search <project-root> <query> [mode] [scope] [max-results] [language]` | Search in `auto`, `exact`, `graph`, or `semantic` mode, with an optional graph-adapter language. |
 | `pctx trace <project-root> <symbol> <direction> [max-results] [language]` | Trace relationships with an installed language adapter. |
 | `pctx impact <project-root> <path> [max-results] [language]` | Rank files that historically change with a project file. |
 | `pctx read <project-root> <path> [start-line] [end-line]` | Read an allowed, bounded file range. |

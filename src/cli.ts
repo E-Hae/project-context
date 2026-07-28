@@ -28,7 +28,7 @@ function printUsage(stream: NodeJS.WriteStream = process.stderr): void {
       "  pctx index <project-root> [--rebuild]",
       "  pctx watch <project-root> [interval-ms]",
       "  pctx status [project-root]",
-      "  pctx search <project-root> <query> [auto|exact|graph|semantic] [all|code|documents] [max-results]",
+      "  pctx search <project-root> <query> [auto|exact|graph|semantic] [all|code|documents] [max-results] [language]",
       "  pctx trace <project-root> <symbol> <callers|callees|inherits|implements> [max-results] [language]",
       "  pctx impact <project-root> <path> [max-results] [language]",
       "  pctx read <project-root> <path> [start-line] [end-line]",
@@ -271,6 +271,7 @@ async function main(args: string[]): Promise<number> {
     }
     const maxResultsValue = rest[argumentIndex];
     const maxResults = maxResultsValue === undefined ? 50 : Number(maxResultsValue);
+    const language = rest[argumentIndex + 1];
     const stateRoot = process.env.PROJECT_CONTEXT_STATE_ROOT;
     const result = await searchProject(
       {
@@ -279,6 +280,7 @@ async function main(args: string[]): Promise<number> {
         mode: mode as SearchMode,
         scope,
         maxResults,
+        ...(language === undefined ? {} : { language }),
       },
       stateRoot ? { stateRoot } : {},
     );
