@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-export interface RoslynWorkerRequest {
+export interface RoslynTraceWorkerRequest {
   version: 1;
   projectRoot: string;
   files: string[];
@@ -12,9 +12,21 @@ export interface RoslynWorkerRequest {
   maxResults: number;
 }
 
+export interface RoslynGraphWorkerRequest {
+  version: 1;
+  operation: "build_graph";
+  projectRoot: string;
+  files: string[];
+  assemblyDefinitions: string[];
+  maxNodes: number;
+  maxEdges: number;
+}
+
+export type RoslynWorkerRequest = RoslynTraceWorkerRequest | RoslynGraphWorkerRequest;
+
 const moduleDirectory = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_PACKAGE_ROOT = path.resolve(moduleDirectory, "..", "..");
-const MAX_WORKER_OUTPUT_BYTES = 8 * 1024 * 1024;
+const MAX_WORKER_OUTPUT_BYTES = 32 * 1024 * 1024;
 
 export function getRoslynWorkerPath(packageRoot = DEFAULT_PACKAGE_ROOT): string {
   return path.join(

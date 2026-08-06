@@ -1,5 +1,6 @@
 import type {
   TraceAdapter,
+  TraceAdapterGraphResponse,
   TraceAdapterRequest,
   TraceAdapterResponse,
   TraceDiagnostics,
@@ -70,10 +71,41 @@ interface RoslynFailure {
   };
 }
 
+interface RoslynGraphSuccess {
+  version: 1;
+  ok: true;
+  operation: "build_graph";
+  workerVersion: string;
+  nodes: RoslynSymbol[];
+  diagnostics: RoslynDiagnostics;
+  results: Array<{
+    relation: string;
+    from: number | RoslynSymbol;
+    to: number | RoslynSymbol;
+    evidence: {
+      path: string;
+      lineStart: number;
+      lineEnd: number;
+      fileHash: string;
+    };
+  }>;
+  truncated: boolean;
+}
+
+const MAX_CSHARP_GRAPH_NODES = 5_000;
+const MAX_CSHARP_GRAPH_EDGES = 10_000;
+
 function isRoslynResponse(value: unknown): value is RoslynSuccess | RoslynFailure {
   if (typeof value !== "object" || value === null) return false;
   const response = value as Record<string, unknown>;
   return response.version === 1 && typeof response.ok === "boolean";
+}
+
+function isRoslynGraphResponse(value: unknown): value is RoslynGraphSuccess | RoslynFailure {
+  if (typeof value !== "object" || value === null) return false;
+  const response = value as Record<string, unknown>;
+  return response.version === 1 && typeof response.ok === "boolean" &&
+    (response.ok === false || response.operation === "build_graph");
 }
 
 type CsharpAdapterErrorCode =
@@ -205,6 +237,58 @@ export function createCsharpTraceAdapter(
         })),
         truncated: response.truncated,
       } satisfies TraceAdapterResponse;
+    },
+    async buildGraph(request): Promise<TraceAdapterGraphResponse> {
+      let response: unknown;
+      try {
+        response = await runWorker({
+          version: 1,
+          operation: "build_graph",
+          projectRoot: request.projectRoot,
+          files: request.files,
+          assemblyDefinitions: request.auxiliaryFiles,
+          maxNodes: Math.min(request.maxNodes, MAX_CSHARP_GRAPH_NODES),
+          maxEdges: Math.min(request.maxEdges, MAX_CSHARP_GRAPH_EDGES),
+        });
+      } catch (error) {
+        throw new CsharpAdapterError(
+          error instanceof Error ? error.message : String(error),
+          "unavailable",
+        );
+      }
+      if (!isRoslynGraphResponse(response)) {
+        throw new CsharpAdapterError("Roslyn worker returned an invalid graph response", "failed");
+      }
+      if (!response.ok) {
+        throw new CsharpAdapterError(
+          response.error.message,
+          adapterFailureCode(response.error.code),
+          response.error.candidates,
+        );
+      }
+      return {
+        workerVersion: response.workerVersion,
+        nodes: response.nodes.map(toTraceSymbol),
+        diagnostics: toTraceDiagnostics(response.diagnostics),
+        results: response.results.map((result) => {
+          const from = typeof result.from === "number"
+            ? response.nodes[result.from]
+            : result.from;
+          const to = typeof result.to === "number"
+            ? response.nodes[result.to]
+            : result.to;
+          if (from === undefined || to === undefined) {
+            throw new CsharpAdapterError("Roslyn worker graph edge references a missing node", "failed");
+          }
+          return {
+            relation: result.relation,
+            from: toTraceSymbol(from),
+            to: toTraceSymbol(to),
+            evidence: result.evidence,
+          };
+        }),
+        truncated: response.truncated,
+      } satisfies TraceAdapterGraphResponse;
     },
   };
 }

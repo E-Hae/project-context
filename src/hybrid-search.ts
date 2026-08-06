@@ -7,6 +7,7 @@ import {
   type GraphTraceResult,
   type TraceDirection,
 } from "./graph-client.js";
+import { searchGraphRag, type GraphRagSearchResult } from "./graphrag-search.js";
 import type {
   ExactSearchResult,
   SemanticSearchResult,
@@ -34,6 +35,7 @@ export type HybridSearchResult =
 interface HybridSearchDependencies {
   searchExact: typeof searchExact;
   searchSemantic: typeof searchSemantic;
+  searchGraphRag: typeof searchGraphRag;
   traceProject: typeof traceProject;
 }
 
@@ -179,6 +181,7 @@ export async function searchProject(
   const dependencies: HybridSearchDependencies = {
     searchExact,
     searchSemantic,
+    searchGraphRag,
     traceProject,
     ...options.dependencies,
   };
@@ -249,6 +252,22 @@ export async function searchProject(
     : decideSearchRoute(input.query, scope);
 
   if (decision.route === "semantic") {
+    if (mode === "auto" && scope !== "documents") {
+      return dependencies.searchGraphRag(
+        {
+          projectPath: input.projectPath,
+          query: input.query,
+          scope,
+          maxResults,
+        },
+        {
+          ...(options.stateRoot === undefined ? {} : { stateRoot: options.stateRoot }),
+          ...(options.semantic?.handoffRoot === undefined
+            ? {}
+            : { handoffRoot: options.semantic.handoffRoot }),
+        },
+      );
+    }
     return dependencies.searchSemantic(semanticInput, semanticOptions);
   }
   if (decision.route === "exact") {

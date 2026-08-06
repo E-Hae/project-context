@@ -9,7 +9,62 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 
 import { createProjectContextServer } from "../src/mcp-server.js";
 import { GraphTraceError } from "../src/graph-client.js";
+import type { SemanticSearchResult } from "../src/result-format.js";
 import { writeProjectConfig } from "./project-config-fixture.js";
+
+test("context_search keeps the semantic route when GraphRAG metadata is present", async () => {
+  let includeGraph = false;
+  const semantic: SemanticSearchResult = {
+    route: "semantic",
+    fallbackUsed: false,
+    query: "workflow",
+    scope: "code",
+    commit: null,
+    indexCommit: null,
+    indexedAt: "2026-08-05T00:00:00.000Z",
+    stale: false,
+    queryExpansion: { used: false, model: null, expandedQuery: null, identifierQuery: null, error: null },
+    staleResultsSkipped: 0,
+    results: [],
+    truncated: false,
+  };
+  const server = createProjectContextServer({
+    search: async () => includeGraph
+      ? {
+          ...semantic,
+          graph: {
+            languages: ["fixture"],
+            seedNodes: 1,
+            expandedNodes: 1,
+            hops: 2,
+            staleNodesSkipped: 0,
+            staleEdgesSkipped: 0,
+            truncated: false,
+          },
+        }
+      : semantic,
+  });
+  const client = new Client({ name: "project-context-test", version: "0.1.0" });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  await server.connect(serverTransport);
+  await client.connect(clientTransport);
+  try {
+    for (const expectedGraph of [false, true]) {
+      includeGraph = expectedGraph;
+      const response = await client.callTool({
+        name: "context_search",
+        arguments: { projectPath: ".", query: "workflow", mode: "auto" },
+      });
+      const content = response.structuredContent as { route?: unknown; graph?: unknown } | undefined;
+      assert.equal(response.isError, undefined);
+      assert.equal(content?.route, "semantic");
+      assert.equal(content?.graph !== undefined, expectedGraph);
+    }
+  } finally {
+    await client.close();
+    await server.close();
+  }
+});
 
 test("context_status is exposed through MCP and returns structured content", async () => {
   const projectRoot = await mkdtemp(path.join(tmpdir(), "project-context-mcp-"));

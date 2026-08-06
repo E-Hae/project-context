@@ -14,7 +14,7 @@ using Microsoft.Win32.SafeHandles;
 
 internal static class Program
 {
-    private const string WorkerVersion = "project-context-roslyn/0.1.0";
+    private const string WorkerVersion = "project-context-roslyn/0.3.0";
     private const int MaxFiles = 100_000;
     private const int MaxFileBytes = 2 * 1024 * 1024;
     private const int MaxMessages = 20;
@@ -111,6 +111,17 @@ internal static class Program
                     concurrentBuild: true,
                     metadataImportOptions: MetadataImportOptions.All));
             var analyzer = new TraceAnalyzer(compilation, sources, diagnostics);
+            if (request.Operation == "build_graph")
+            {
+                var graph = analyzer.BuildGraph(request.MaxNodes, request.MaxEdges);
+                diagnostics.Partial = diagnostics.FilesSkipped > 0
+                    || diagnostics.MetadataFailures > 0
+                    || diagnostics.ReferenceFailures > 0
+                    || diagnostics.ParseErrors > 0
+                    || diagnostics.UnresolvedCandidates > 0;
+                diagnostics.ElapsedMs = stopwatch.ElapsedMilliseconds;
+                return ToGraphSuccess(graph, diagnostics);
+            }
             var result = analyzer.Trace(request.Symbol!, request.Direction!, request.MaxResults);
 
             diagnostics.Partial = diagnostics.FilesSkipped > 0
@@ -153,6 +164,32 @@ internal static class Program
         }
     }
 
+    private static GraphSuccess ToGraphSuccess(GraphResult graph, TraceDiagnostics diagnostics)
+    {
+        var nodeIndexes = graph.Nodes
+            .Select((node, index) => new { Key = GraphNodeKey(node), Index = index })
+            .ToDictionary(entry => entry.Key, entry => entry.Index, StringComparer.Ordinal);
+        var edges = graph.Edges
+            .Select(edge => new GraphCompactEdge(
+                edge.Relation,
+                nodeIndexes[GraphNodeKey(edge.From)],
+                nodeIndexes[GraphNodeKey(edge.To)],
+                edge.Evidence))
+            .ToList();
+        return new GraphSuccess(
+            1,
+            true,
+            "build_graph",
+            WorkerVersion,
+            graph.Nodes,
+            edges,
+            graph.Truncated,
+            diagnostics);
+    }
+
+    private static string GraphNodeKey(SymbolNode node) =>
+        $"{node.FullName}|{node.Path}|{node.LineStart}|{node.LineEnd}|{node.Signature}";
+
     private static void ValidateRequest(TraceRequest request)
     {
         if (request.Version != 1)
@@ -172,6 +209,18 @@ internal static class Program
         if (request.AssemblyDefinitions is null || request.AssemblyDefinitions.Length > MaxFiles)
         {
             throw new WorkerException("invalid_request", "Assembly definition list is invalid");
+        }
+        if (request.Operation == "build_graph")
+        {
+            if (request.MaxNodes is < 1 or > 20_000 || request.MaxEdges is < 1 or > 50_000)
+            {
+                throw new WorkerException("invalid_request", "Graph limits are outside the supported range");
+            }
+            return;
+        }
+        if (request.Operation is not null)
+        {
+            throw new WorkerException("invalid_request", "Trace operation is invalid");
         }
         if (string.IsNullOrWhiteSpace(request.Symbol)
             || request.Symbol.Length > 512
@@ -607,6 +656,139 @@ internal static class Program
                 ordered.Count > maxResults);
         }
 
+        public GraphResult BuildGraph(int maxNodes, int maxEdges)
+        {
+            var nodes = new List<SymbolNode>();
+            var edges = new List<GraphTraceEdge>();
+            var nodeKeys = new HashSet<string>(StringComparer.Ordinal);
+            var truncated = false;
+            bool AddNode(ISymbol symbol)
+            {
+                var node = ToNode(symbol);
+                var key = $"{node.FullName}|{node.Path}|{node.LineStart}|{node.LineEnd}|{node.Signature}";
+                if (!nodeKeys.Add(key))
+                {
+                    return true;
+                }
+                if (nodes.Count >= maxNodes)
+                {
+                    nodeKeys.Remove(key);
+                    truncated = true;
+                    return false;
+                }
+                nodes.Add(node);
+                return true;
+            }
+            void AddEdge(GraphTraceEdge edge)
+            {
+                if (edges.Count >= maxEdges)
+                {
+                    truncated = true;
+                    return;
+                }
+                edges.Add(edge);
+            }
+
+            foreach (var source in _sources.Values)
+            {
+                var root = source.Tree.GetRoot();
+                var model = GetModel(source.Tree);
+                foreach (var declaration in root.DescendantNodes().OfType<TypeDeclarationSyntax>())
+                {
+                    if (model.GetDeclaredSymbol(declaration) is INamedTypeSymbol type)
+                    {
+                        AddNode(type.OriginalDefinition);
+                    }
+                }
+                foreach (var declaration in root.DescendantNodes().OfType<BaseMethodDeclarationSyntax>())
+                {
+                    if (model.GetDeclaredSymbol(declaration) is IMethodSymbol method)
+                    {
+                        AddNode(method.OriginalDefinition);
+                    }
+                }
+                foreach (var invocation in root.DescendantNodes().OfType<InvocationExpressionSyntax>())
+                {
+                    if (model.GetSymbolInfo(invocation).Symbol is not IMethodSymbol called)
+                    {
+                        _diagnostics.UnresolvedCandidates++;
+                        continue;
+                    }
+                    var normalized = NormalizeMethod(called);
+                    var caller = EnclosingMethod(model, invocation.SpanStart);
+                    if (caller is null || !HasSource(normalized))
+                    {
+                        continue;
+                    }
+                    if (AddNode(caller) && AddNode(normalized))
+                    {
+                        AddEdge(new GraphTraceEdge("calls", ToNode(caller), ToNode(normalized), GraphSourceEvidence(invocation)));
+                    }
+                }
+                foreach (var creation in root.DescendantNodes().OfType<BaseObjectCreationExpressionSyntax>())
+                {
+                    if (model.GetSymbolInfo(creation).Symbol is not IMethodSymbol constructor)
+                    {
+                        _diagnostics.UnresolvedCandidates++;
+                        continue;
+                    }
+                    var normalized = NormalizeMethod(constructor);
+                    var caller = EnclosingMethod(model, creation.SpanStart);
+                    if (caller is null || !HasSource(normalized))
+                    {
+                        continue;
+                    }
+                    if (AddNode(caller) && AddNode(normalized))
+                    {
+                        AddEdge(new GraphTraceEdge("constructs", ToNode(caller), ToNode(normalized), GraphSourceEvidence(creation)));
+                    }
+                }
+                foreach (var declaration in root.DescendantNodes().OfType<TypeDeclarationSyntax>())
+                {
+                    if (declaration.BaseList is null || model.GetDeclaredSymbol(declaration) is not INamedTypeSymbol type)
+                    {
+                        continue;
+                    }
+                    foreach (var baseType in declaration.BaseList.Types)
+                    {
+                        if (model.GetTypeInfo(baseType.Type).Type is not INamedTypeSymbol related)
+                        {
+                            _diagnostics.UnresolvedCandidates++;
+                            continue;
+                        }
+                        var normalized = related.OriginalDefinition;
+                        if (AddNode(type.OriginalDefinition) && AddNode(normalized))
+                        {
+                            AddEdge(new GraphTraceEdge(
+                                normalized.TypeKind == TypeKind.Interface ? "implements" : "inherits",
+                                ToNode(type.OriginalDefinition),
+                                ToNode(normalized),
+                                GraphSourceEvidence(baseType)));
+                        }
+                    }
+                }
+            }
+
+            var orderedNodes = nodes
+                .OrderBy(node => node.Path, StringComparer.Ordinal)
+                .ThenBy(node => node.LineStart)
+                .ThenBy(node => node.FullName, StringComparer.Ordinal)
+                .ToList();
+            var orderedEdges = edges
+                .GroupBy(edge => $"{edge.Relation}|{edge.From.Signature}|{edge.To.Signature}|{edge.Evidence.Path}|{edge.Evidence.LineStart}")
+                .Select(group => group.First())
+                .OrderBy(edge => edge.Evidence.Path, StringComparer.Ordinal)
+                .ThenBy(edge => edge.Evidence.LineStart)
+                .ThenBy(edge => edge.Relation, StringComparer.Ordinal)
+                .ThenBy(edge => edge.From.FullName, StringComparer.Ordinal)
+                .ThenBy(edge => edge.To.FullName, StringComparer.Ordinal)
+                .ToList();
+            return new GraphResult(
+                orderedNodes,
+                orderedEdges,
+                truncated);
+        }
+
         private List<IMethodSymbol> FindMethods(string query)
         {
             var namePart = query.Split('(', 2)[0];
@@ -909,6 +1091,17 @@ internal static class Program
                 source.Hash);
         }
 
+        private GraphEvidence GraphSourceEvidence(SyntaxNode node)
+        {
+            var source = _sources[node.SyntaxTree];
+            var span = node.GetLocation().GetLineSpan();
+            return new GraphEvidence(
+                node.SyntaxTree.FilePath.Replace('\\', '/'),
+                span.StartLinePosition.Line + 1,
+                span.EndLinePosition.Line + 1,
+                source.Hash);
+        }
+
         private static IMethodSymbol? EnclosingMethod(SemanticModel model, int position)
         {
             var current = model.GetEnclosingSymbol(position);
@@ -1010,12 +1203,15 @@ internal static class Program
     private sealed class TraceRequest
     {
         public int Version { get; init; }
+        public string? Operation { get; init; }
         public string? ProjectRoot { get; init; }
         public string[]? Files { get; init; }
         public string[]? AssemblyDefinitions { get; init; }
         public string? Symbol { get; init; }
         public string? Direction { get; init; }
         public int MaxResults { get; init; } = 50;
+        public int MaxNodes { get; init; }
+        public int MaxEdges { get; init; }
     }
 
     private sealed class TraceDiagnostics
@@ -1039,6 +1235,7 @@ internal static class Program
     private sealed record AssemblyDefinition(string Directory, string Name);
     private sealed record SourceUnit(SyntaxTree Tree, string Assembly, string Hash);
     private sealed record TraceResult(List<SymbolNode> MatchedSymbols, List<TraceEdge> Edges, bool Truncated);
+    private sealed record GraphResult(List<SymbolNode> Nodes, List<GraphTraceEdge> Edges, bool Truncated);
     private sealed record SymbolNode(
         string Name,
         string FullName,
@@ -1051,7 +1248,10 @@ internal static class Program
         string? FileHash,
         bool UnityMessage);
     private sealed record SourceEvidence(string Path, int LineStart, int LineEnd, string Text, string FileHash);
+    private sealed record GraphEvidence(string Path, int LineStart, int LineEnd, string FileHash);
     private sealed record TraceEdge(string Relation, SymbolNode From, SymbolNode To, SourceEvidence Evidence);
+    private sealed record GraphTraceEdge(string Relation, SymbolNode From, SymbolNode To, GraphEvidence Evidence);
+    private sealed record GraphCompactEdge(string Relation, int From, int To, GraphEvidence Evidence);
     private sealed record WorkerError(string Code, string Message, string[] Candidates);
     private sealed record TraceSuccess(
         int Version,
@@ -1061,6 +1261,15 @@ internal static class Program
         string Direction,
         List<SymbolNode> MatchedSymbols,
         List<TraceEdge> Results,
+        bool Truncated,
+        TraceDiagnostics Diagnostics);
+    private sealed record GraphSuccess(
+        int Version,
+        bool Ok,
+        string Operation,
+        string WorkerVersion,
+        List<SymbolNode> Nodes,
+        List<GraphCompactEdge> Results,
         bool Truncated,
         TraceDiagnostics Diagnostics);
     private sealed record TraceFailure(int Version, bool Ok, WorkerError Error, TraceDiagnostics Diagnostics);

@@ -7,6 +7,9 @@ import * as ts from "typescript";
 import {
   TraceAdapterError,
   type TraceAdapter,
+  type TraceAdapterGraphEdge,
+  type TraceAdapterGraphRequest,
+  type TraceAdapterGraphResponse,
   type TraceAdapterRequest,
   type TraceAdapterResponse,
   type TraceAdapterEvidence,
@@ -371,6 +374,102 @@ class TypeScriptAnalyzer {
     };
   }
 
+  buildGraph(
+    request: TraceAdapterGraphRequest,
+    filesRequested: number,
+    filesSkipped: number,
+    startedAt: number,
+  ): TraceAdapterGraphResponse {
+    const edges = new Map<string, TraceAdapterGraphEdge>();
+    let edgeLimitReached = false;
+    const addEdge = (edge: TraceAdapterGraphEdge): void => {
+      const key = [
+        edge.relation,
+        edge.from.fullName,
+        edge.to.fullName,
+        edge.evidence.path,
+        String(edge.evidence.lineStart),
+        String(edge.evidence.lineEnd),
+        edge.evidence.fileHash,
+      ].join("\0");
+      if (edges.has(key)) return;
+      if (edges.size >= request.maxEdges) {
+        edgeLimitReached = true;
+        return;
+      }
+      edges.set(key, edge);
+    };
+    for (const source of this.sourceByPath.values()) {
+      this.visitCalls(source.sourceFile, (call, callee, constructs) => {
+        if (callee === undefined) return;
+        const calleeInfo = this.infoBySymbol.get(callee);
+        const caller = this.enclosingCallable(call);
+        if (calleeInfo === undefined || caller === undefined) return;
+        addEdge({
+          relation: constructs ? "constructs" : "calls",
+          from: this.toTraceSymbol(caller.symbol, caller),
+          to: this.toTraceSymbol(callee, calleeInfo),
+          evidence: this.graphEvidence(call),
+        });
+      });
+    }
+    for (const target of this.typeInfos) {
+      if (!isHeritageDeclaration(target.declaration) || target.declaration.heritageClauses === undefined) continue;
+      for (const heritage of target.declaration.heritageClauses) {
+        const relation = heritage.token === ts.SyntaxKind.ImplementsKeyword ? "implements" : "inherits";
+        for (const type of heritage.types) {
+          const related = this.relatedTypeSymbol(type);
+          if (related === undefined) {
+            this.unresolvedCandidates += 1;
+            continue;
+          }
+          addEdge({
+            relation,
+            from: this.toTraceSymbol(target.symbol, target),
+            to: this.toTraceSymbol(related),
+            evidence: this.graphEvidence(type),
+          });
+        }
+      }
+    }
+    const nodes = [...this.declarationInfos]
+      .sort((left, right) =>
+        left.source.relativePath.localeCompare(right.source.relativePath, "en") ||
+        left.declaration.getStart(left.source.sourceFile) - right.declaration.getStart(right.source.sourceFile) ||
+        left.key.localeCompare(right.key, "en"))
+      .slice(0, request.maxNodes)
+      .map((info) => this.toTraceSymbol(info.symbol, info));
+    const orderedEdges = [...edges.values()]
+      .sort((left, right) =>
+        left.evidence.path.localeCompare(right.evidence.path, "en") ||
+        left.evidence.lineStart - right.evidence.lineStart ||
+        left.relation.localeCompare(right.relation, "en") ||
+        left.from.fullName.localeCompare(right.from.fullName, "en") ||
+        left.to.fullName.localeCompare(right.to.fullName, "en"));
+    return {
+      workerVersion: `typescript/${ts.version}`,
+      nodes,
+      results: orderedEdges,
+      diagnostics: {
+        filesRequested,
+        filesLoaded: this.sourceByPath.size,
+        filesSkipped,
+        partial: filesSkipped > 0 || this.parseErrors > 0 || this.unresolvedCandidates > 0,
+        elapsedMs: Date.now() - startedAt,
+        messages: this.messages,
+        metadata: {
+          compilerVersion: ts.version,
+          config: this.configName,
+          parseErrors: this.parseErrors,
+          unresolvedCandidates: this.unresolvedCandidates,
+          checkJs: this.program.getCompilerOptions().checkJs === true,
+          allowJs: this.program.getCompilerOptions().allowJs === true,
+        },
+      },
+      truncated: this.declarationInfos.length > request.maxNodes || edgeLimitReached,
+    };
+  }
+
   private collectDeclarations(sourceFile: ts.SourceFile, source: SourceInfo): void {
     const visit = (node: ts.Node): void => {
       if (isCallableDeclaration(node)) {
@@ -615,9 +714,23 @@ class TypeScriptAnalyzer {
       fileHash: source.hash,
     };
   }
+
+  private graphEvidence(node: ts.Node): TraceAdapterGraphEdge["evidence"] {
+    const source = sourceInfoForNode(node, this.sourceByPath);
+    if (source === undefined) {
+      throw new TraceAdapterError("Graph evidence is outside the requested source set", "failed");
+    }
+    const range = lineRange(source, node);
+    return {
+      path: source.relativePath,
+      lineStart: range.lineStart,
+      lineEnd: range.lineEnd,
+      fileHash: source.hash,
+    };
+  }
 }
 
-async function createAnalyzer(request: TraceAdapterRequest): Promise<{
+async function createAnalyzer(request: Pick<TraceAdapterRequest, "projectRoot" | "files" | "auxiliaryFiles">): Promise<{
   analyzer: TypeScriptAnalyzer;
   filesRequested: number;
   filesSkipped: number;
@@ -725,6 +838,24 @@ export function createTypeScriptTraceAdapter(): TraceAdapter {
           results: result.results,
           truncated: result.truncated,
         };
+      } catch (error) {
+        if (error instanceof TraceAdapterError) throw error;
+        throw new TraceAdapterError(
+          error instanceof Error ? error.message : String(error),
+          "failed",
+        );
+      }
+    },
+    async buildGraph(request): Promise<TraceAdapterGraphResponse> {
+      const startedAt = Date.now();
+      try {
+        const created = await createAnalyzer(request);
+        return created.analyzer.buildGraph(
+          request,
+          created.filesRequested,
+          created.filesSkipped,
+          startedAt,
+        );
       } catch (error) {
         if (error instanceof TraceAdapterError) throw error;
         throw new TraceAdapterError(

@@ -110,3 +110,34 @@ test("TypeScript adapter traces calls and type relationships with source evidenc
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("TypeScript adapter builds a bounded whole-project source graph", async () => {
+  const root = await createFixture();
+  try {
+    const graph = await traceAdapter.buildGraph!({
+      projectRoot: root,
+      files: requestFiles,
+      auxiliaryFiles: requestAuxiliaryFiles,
+      maxNodes: 100,
+      maxEdges: 100,
+    });
+    assert.equal(graph.nodes.some((node) => node.name === "invoke"), true);
+    assert.equal(graph.results.some((edge) =>
+      edge.relation === "calls" && edge.from.name === "invoke" && edge.to.name === "run"), true);
+    assert.equal(graph.results.some((edge) =>
+      edge.relation === "implements" && edge.from.name === "Derived" && edge.to.name === "Runnable"), true);
+    assert.equal(graph.results.every((edge) => "text" in edge.evidence === false), true);
+    const bounded = await traceAdapter.buildGraph!({
+      projectRoot: root,
+      files: requestFiles,
+      auxiliaryFiles: requestAuxiliaryFiles,
+      maxNodes: 1,
+      maxEdges: 1,
+    });
+    assert.equal(bounded.nodes.length, 1);
+    assert.equal(bounded.results.length, 1);
+    assert.equal(bounded.truncated, true);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});

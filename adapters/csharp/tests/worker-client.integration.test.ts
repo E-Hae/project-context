@@ -66,3 +66,30 @@ test("C# trace adapter preserves the core request contract", { skip: !workerBuil
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("C# adapter builds a bounded Roslyn source graph", { skip: !workerBuilt }, async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "project-context-csharp-graph-"));
+  try {
+    await mkdir(path.join(root, "src"));
+    await writeFile(path.join(root, "src", "Fixture.asmdef"), "{\"name\":\"Fixture\"}\n", "utf8");
+    await writeFile(path.join(root, "src", "Feature.cs"), [
+      "namespace Fixture {",
+      "  class Feature { public void Target() {} }",
+      "  class Caller { void Invoke() { new Feature().Target(); } }",
+      "}",
+      "",
+    ].join("\n"), "utf8");
+    const graph = await traceAdapter.buildGraph!({
+      projectRoot: root,
+      files: ["src/Feature.cs"],
+      auxiliaryFiles: ["src/Fixture.asmdef"],
+      maxNodes: 100,
+      maxEdges: 100,
+    });
+    assert.equal(graph.nodes.some((node) => node.name === "Invoke"), true);
+    assert.equal(graph.results.some((edge) => edge.relation === "calls"), true);
+    assert.equal(graph.results.every((edge) => "text" in edge.evidence === false), true);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});

@@ -5,11 +5,15 @@ import path from "node:path";
 import test from "node:test";
 
 import type { EmbeddingProvider } from "../src/embedding-client.js";
+import { loadProjectConfig } from "../src/config.js";
 import type {
   CollectedSourceFile,
   IndexableFileRead,
 } from "../src/file-collector.js";
 import { indexProject } from "../src/indexer.js";
+import { createGraphShard, loadProjectGraph } from "../src/graph-store.js";
+import { loadProjectSummary } from "../src/summary-store.js";
+import { deriveProjectIndexIdentity } from "../src/index-state.js";
 import { writeProjectConfig } from "./project-config-fixture.js";
 import type {
   ProjectContextVectorStore,
@@ -435,6 +439,105 @@ test("indexProject is incremental and removes vectors for deleted files", async 
     assert.deepEqual(third.deletedFileSample, ["src/Feature.cs"]);
     assert.equal(third.chunksDeleted, 1);
     assert.equal(store.entities.size, 0);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("indexProject saves graph snapshots separately from the vector index state", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "project-context-graph-index-"));
+  const stateRoot = path.join(root, "state");
+  const store = new MemoryVectorStore();
+  try {
+    await writeProjectFixture(root, [{ name: "Feature.ts", text: "export function feature(): void {}\n" }]);
+    const result = await indexProject(root, {
+      stateRoot,
+      dependencies: {
+        createEmbeddingProvider: () => ({
+          model: "fixture-embedding",
+          async probeDimension() { return 2; },
+          async embedDocuments(texts) { return texts.map((text) => [text.length, 1]); },
+          async embedQuery(text) { return [text.length, 1]; },
+        }),
+        createVectorStore: () => store,
+        now: () => new Date("2026-08-05T00:00:00.000Z"),
+        sleep: async () => {},
+        buildGraph: async () => ({
+          shards: [createGraphShard("fixture", "fixture-adapter", {
+            workerVersion: "fixture/1.0",
+            nodes: [{
+              name: "feature",
+              fullName: "feature",
+              signature: "(): void",
+              kind: "function",
+              path: "src/Feature.ts",
+              lineStart: 1,
+              lineEnd: 1,
+              fileHash: "a".repeat(64),
+            }],
+            results: [],
+            diagnostics: {
+              filesRequested: 1,
+              filesLoaded: 1,
+              filesSkipped: 0,
+              partial: false,
+              elapsedMs: 1,
+              messages: [],
+            },
+            truncated: false,
+          })],
+          diagnostics: [],
+          adaptersConsidered: 1,
+          adaptersIndexed: 1,
+        }),
+      },
+    });
+    const config = await loadProjectConfig(root);
+    const graph = await loadProjectGraph(deriveProjectIndexIdentity(root, config.value), stateRoot);
+    const summary = await loadProjectSummary(deriveProjectIndexIdentity(root, config.value), stateRoot);
+    assert.equal(result.graph?.adaptersIndexed, 1);
+    assert.equal(result.graph?.nodes, 1);
+    assert.equal(graph.valid, true);
+    assert.equal(graph.value?.shards[0]?.language, "fixture");
+    assert.equal(result.graph?.summary.manifestPath !== null, true);
+    assert.equal(summary.valid, true);
+    assert.equal(summary.value?.moduleCount, 2);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("indexProject skips hierarchy snapshots when no graph shards are available", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "project-context-empty-graph-index-"));
+  const stateRoot = path.join(root, "state");
+  const store = new MemoryVectorStore();
+  try {
+    await writeProjectFixture(root, [{ name: "Feature.ts", text: "export const feature = true;\n" }]);
+    const result = await indexProject(root, {
+      stateRoot,
+      dependencies: {
+        createEmbeddingProvider: () => ({
+          model: "fixture-embedding",
+          async probeDimension() { return 2; },
+          async embedDocuments(texts) { return texts.map((text) => [text.length, 1]); },
+          async embedQuery(text) { return [text.length, 1]; },
+        }),
+        createVectorStore: () => store,
+        now: () => new Date("2026-08-05T00:00:00.000Z"),
+        sleep: async () => {},
+        buildGraph: async () => ({
+          shards: [],
+          diagnostics: [],
+          adaptersConsidered: 1,
+          adaptersIndexed: 0,
+        }),
+      },
+    });
+    const config = await loadProjectConfig(root);
+    const summary = await loadProjectSummary(deriveProjectIndexIdentity(root, config.value), stateRoot);
+    assert.equal(result.graph?.summary.manifestPath, null);
+    assert.equal(result.graph?.summary.diagnostics[0], "Hierarchy summary skipped because the graph snapshot is empty");
+    assert.equal(summary.exists, false);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

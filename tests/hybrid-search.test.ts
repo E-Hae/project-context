@@ -13,6 +13,7 @@ import {
   HybridSearchError,
   searchProject,
 } from "../src/hybrid-search.js";
+import type { GraphRagSearchResult } from "../src/graphrag-search.js";
 import type {
   ExactSearchResult,
   SemanticSearchResult,
@@ -65,6 +66,22 @@ function semanticResult(): SemanticSearchResult {
     staleResultsSkipped: 0,
     results: [],
     truncated: false,
+  };
+}
+
+function graphRagResult(): GraphRagSearchResult {
+  return {
+    ...semanticResult(),
+    route: "semantic",
+    graph: {
+      languages: ["fixture"],
+      seedNodes: 1,
+      expandedNodes: 1,
+      hops: 2,
+      staleNodesSkipped: 0,
+      staleEdgesSkipped: 0,
+      truncated: false,
+    },
   };
 }
 
@@ -220,6 +237,27 @@ test("explicit search modes are honored without fallback", async () => {
   );
   assert.equal(semantic.route, "semantic");
   assert.equal(semanticCalls, 1);
+});
+
+test("auto semantic routing uses GraphRAG when a fresh graph snapshot is available", async () => {
+  let semanticCalls = 0;
+  const result = await searchProject(
+    { projectPath: ".", query: "how does the feature workflow work", mode: "auto" },
+    {
+      dependencies: {
+        searchExact: async () => exactResult(false),
+        searchSemantic: async () => {
+          semanticCalls += 1;
+          return semanticResult();
+        },
+        searchGraphRag: async () => graphRagResult(),
+        traceProject: async () => graphResult(false),
+      },
+    },
+  );
+  assert.equal(result.route, "semantic");
+  assert.equal((result as GraphRagSearchResult).graph?.expandedNodes, 1);
+  assert.equal(semanticCalls, 0);
 });
 
 test("auto mode falls back once only for an empty exact or graph route", async () => {

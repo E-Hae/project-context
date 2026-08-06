@@ -13,7 +13,7 @@ import {
   type SourceTarget,
 } from "./source-policy.js";
 
-const MAX_INDEX_FILE_BYTES = 2 * 1024 * 1024;
+export const MAX_INDEX_FILE_BYTES = 2 * 1024 * 1024;
 const MAX_COLLECTED_FILES = 100_000;
 
 export interface CollectedSourceFile {

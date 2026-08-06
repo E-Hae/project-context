@@ -31,6 +31,14 @@ import {
   type ProjectIndexFileState,
   type ProjectIndexState,
 } from "./index-state.js";
+import { buildProjectGraph } from "./graph-indexer.js";
+import {
+  graphManifestFingerprint,
+  loadProjectGraph,
+  saveProjectGraph,
+} from "./graph-store.js";
+import { buildProjectSummary } from "./summary-indexer.js";
+import { saveProjectSummary } from "./summary-store.js";
 import {
   createVectorStore,
   type ProjectContextVectorStore,
@@ -72,6 +80,23 @@ export interface IndexSummary {
   chunksUpserted: number;
   chunksDeleted: number;
   rebuiltCollection: boolean;
+  graph?: {
+    manifestPath: string | null;
+    adaptersConsidered: number;
+    adaptersIndexed: number;
+    nodes: number;
+    edges: number;
+    diagnostics: string[];
+    summary: {
+      manifestPath: string | null;
+      modules: number;
+      nodes: number;
+      edges: number;
+      sources: number;
+      truncated: boolean;
+      diagnostics: string[];
+    };
+  };
   timingsMs: {
     collect: number;
     prepare: number;
@@ -109,6 +134,10 @@ interface IndexerDependencies {
   now: () => Date;
   nowMs: () => number;
   sleep: (milliseconds: number) => Promise<void>;
+  buildGraph: typeof buildProjectGraph;
+  buildSummary: typeof buildProjectSummary;
+  loadGraph: typeof loadProjectGraph;
+  saveSummary: typeof saveProjectSummary;
 }
 
 const DEFAULT_DEPENDENCIES: IndexerDependencies = {
@@ -121,6 +150,10 @@ const DEFAULT_DEPENDENCIES: IndexerDependencies = {
   now: () => new Date(),
   nowMs: () => performance.now(),
   sleep: delay,
+  buildGraph: buildProjectGraph,
+  buildSummary: buildProjectSummary,
+  loadGraph: loadProjectGraph,
+  saveSummary: saveProjectSummary,
 };
 
 const MILVUS_WRITE_RETRY_DELAYS_MS = [1_000, 2_000, 4_000, 8_000, 16_000, 30_000];
@@ -510,6 +543,106 @@ export async function indexProject(
       commit: project.commit,
       files: nextFiles,
     };
+    let graph: IndexSummary["graph"];
+    try {
+      const builtGraph = await dependencies.buildGraph({
+        projectRoot: project.root,
+        config,
+        files: projectFiles,
+      });
+      const manifestPath = await saveProjectGraph(
+        identity,
+        {
+          projectRoot: project.root,
+          projectSlug: identity.projectSlug,
+          collectionName: identity.collectionName,
+          indexedAt,
+          commit: project.commit,
+          shards: builtGraph.shards,
+          diagnostics: builtGraph.diagnostics,
+        },
+        stateRoot,
+      );
+      let summary: NonNullable<IndexSummary["graph"]>["summary"];
+      if (builtGraph.shards.length === 0) {
+        summary = {
+          manifestPath: null,
+          modules: 0,
+          nodes: 0,
+          edges: 0,
+          sources: 0,
+          truncated: false,
+          diagnostics: ["Hierarchy summary skipped because the graph snapshot is empty"],
+        };
+      } else try {
+        const loadedGraph = await dependencies.loadGraph(identity, stateRoot);
+        if (!loadedGraph.valid || loadedGraph.value === null) {
+          throw new Error(loadedGraph.errors.join(", ") || "Graph manifest is unavailable");
+        }
+        const builtSummary = dependencies.buildSummary({
+          config,
+          graph: loadedGraph.value,
+          shards: builtGraph.shards,
+        });
+        const summaryPath = await dependencies.saveSummary(identity, {
+          projectRoot: project.root,
+          projectSlug: identity.projectSlug,
+          collectionName: identity.collectionName,
+          indexedAt,
+          commit: project.commit,
+          graphFingerprint: graphManifestFingerprint(loadedGraph.value),
+          modules: builtSummary.modules,
+          diagnostics: builtSummary.diagnostics,
+          truncated: builtSummary.truncated,
+        }, stateRoot);
+        summary = {
+          manifestPath: summaryPath,
+          modules: builtSummary.modules.length,
+          nodes: builtSummary.modules.reduce((total, module) => total + module.nodes.length, 0),
+          edges: builtSummary.modules.reduce((total, module) => total + module.edges.length, 0),
+          sources: builtSummary.modules.reduce((total, module) => total + module.sources.length, 0),
+          truncated: builtSummary.truncated,
+          diagnostics: builtSummary.diagnostics,
+        };
+      } catch (error) {
+        summary = {
+          manifestPath: null,
+          modules: 0,
+          nodes: 0,
+          edges: 0,
+          sources: 0,
+          truncated: false,
+          diagnostics: [`Hierarchy summary skipped: ${error instanceof Error ? error.message : String(error)}`],
+        };
+      }
+      graph = {
+        manifestPath,
+        adaptersConsidered: builtGraph.adaptersConsidered,
+        adaptersIndexed: builtGraph.adaptersIndexed,
+        nodes: builtGraph.shards.reduce((total, shard) => total + shard.nodes.length, 0),
+        edges: builtGraph.shards.reduce((total, shard) => total + shard.edges.length, 0),
+        diagnostics: builtGraph.diagnostics,
+        summary,
+      };
+    } catch (error) {
+      graph = {
+        manifestPath: null,
+        adaptersConsidered: 0,
+        adaptersIndexed: 0,
+        nodes: 0,
+        edges: 0,
+        diagnostics: [`Graph snapshot skipped: ${error instanceof Error ? error.message : String(error)}`],
+        summary: {
+          manifestPath: null,
+          modules: 0,
+          nodes: 0,
+          edges: 0,
+          sources: 0,
+          truncated: false,
+          diagnostics: ["Hierarchy summary skipped because the graph snapshot is unavailable"],
+        },
+      };
+    }
     const saveStateStartedAt = dependencies.nowMs();
     const statePath = await saveProjectIndexState(identity, state, stateRoot);
     const saveStateMs = elapsedMilliseconds(
@@ -539,6 +672,7 @@ export async function indexProject(
       chunksUpserted,
       chunksDeleted: staleIds.length,
       rebuiltCollection,
+      graph,
       timingsMs: {
         collect: collectMs,
         prepare: prepareMs,

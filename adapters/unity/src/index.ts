@@ -8,6 +8,9 @@ import { promisify } from "node:util";
 import {
   TraceAdapterError,
   type TraceAdapter,
+  type TraceAdapterGraphEdge,
+  type TraceAdapterGraphRequest,
+  type TraceAdapterGraphResponse,
   type TraceAdapterEvidence,
   type TraceAdapterRequest,
   type TraceAdapterResponse,
@@ -57,7 +60,11 @@ function evidence(record: AssetRecord, line: number): TraceAdapterEvidence {
   return { path: record.path, lineStart: line, lineEnd: line, text: record.lines[line - 1] ?? "", fileHash: record.hash };
 }
 
-async function loadRecords(request: TraceAdapterRequest): Promise<AssetRecord[]> {
+function graphEvidence(record: AssetRecord, line: number): TraceAdapterGraphEdge["evidence"] {
+  return { path: record.path, lineStart: line, lineEnd: line, fileHash: record.hash };
+}
+
+async function loadRecords(request: Pick<TraceAdapterRequest, "projectRoot" | "files">): Promise<AssetRecord[]> {
   const records: AssetRecord[] = [];
   for (const relativePath of request.files) {
     const absolutePath = path.resolve(request.projectRoot, relativePath);
@@ -86,7 +93,9 @@ function findUnityEditor(version: string | null): string | null {
   return path.join("/opt/Unity/Hub/Editor", version, "Editor/Unity");
 }
 
-async function batchDependencies(request: TraceAdapterRequest): Promise<Map<string, string[]>> {
+async function batchDependencies(
+  request: TraceAdapterRequest | TraceAdapterGraphRequest,
+): Promise<Map<string, string[]>> {
   const unity = request.adapterConfig?.unity;
   if (unity?.mode !== "batch") return new Map();
   const editor = findUnityEditor(unity.editorVersion);
@@ -127,11 +136,12 @@ export function createUnityTraceAdapter(): TraceAdapter {
       const startedAt = Date.now();
       const records = await loadRecords(request);
       if (records.length === 0) throw new TraceAdapterError("No Unity asset files were provided", "invalid_request");
+      const recordsByPath = new Map(records.map((record) => [record.path, record]));
       const guidTargets = new Map<string, AssetRecord>();
       for (const record of records) {
         if (record.guid === null) continue;
         const assetPath = record.path.endsWith(".meta") ? record.path.slice(0, -5) : record.path;
-        guidTargets.set(record.guid, records.find((candidate) => candidate.path === assetPath) ?? record);
+        guidTargets.set(record.guid, recordsByPath.get(assetPath) ?? record);
       }
       const normalized = request.symbol.replaceAll("\\", "/").toLowerCase();
       const matched = records.filter((record) => record.path.toLowerCase() === normalized ||
@@ -166,6 +176,91 @@ export function createUnityTraceAdapter(): TraceAdapter {
       }
       const limited = edges.slice(0, request.maxResults);
       return { workerVersion: request.adapterConfig?.unity.mode === "batch" ? "unity-batch/1.0.0" : "unity-yaml/1.0.0", symbol: request.symbol, direction: request.direction, matchedSymbols: matched.map(symbol), results: limited, truncated: edges.length > limited.length, diagnostics: { filesRequested: request.files.length, filesLoaded: records.length, filesSkipped: 0, partial: false, elapsedMs: Date.now() - startedAt, messages: request.adapterConfig?.unity.mode === "batch" ? ["Unity batch bridge dependencies included"] : [] } };
+    },
+    async buildGraph(request): Promise<TraceAdapterGraphResponse> {
+      const startedAt = Date.now();
+      const records = await loadRecords(request);
+      if (records.length === 0) throw new TraceAdapterError("No Unity asset files were provided", "invalid_request");
+      const recordsByPath = new Map(records.map((record) => [record.path, record]));
+      const guidTargets = new Map<string, AssetRecord>();
+      for (const record of records) {
+        if (record.guid === null) continue;
+        const assetPath = record.path.endsWith(".meta") ? record.path.slice(0, -5) : record.path;
+        guidTargets.set(record.guid, recordsByPath.get(assetPath) ?? record);
+      }
+      const batch = await batchDependencies(request);
+      const unresolved: TraceSymbol = {
+        name: "unresolved",
+        fullName: "unresolved",
+        signature: "unresolved Unity GUID",
+        kind: "external_asset",
+        path: null,
+        lineStart: null,
+        lineEnd: null,
+        fileHash: null,
+      };
+      const edges = new Map<string, TraceAdapterGraphEdge>();
+      let edgeLimitReached = false;
+      const addEdge = (edge: TraceAdapterGraphEdge): void => {
+        const key = [
+          edge.relation,
+          edge.from.fullName,
+          edge.to.fullName,
+          edge.evidence.path,
+          String(edge.evidence.lineStart),
+          String(edge.evidence.lineEnd),
+          edge.evidence.fileHash,
+        ].join("\0");
+        if (edges.has(key)) return;
+        if (edges.size >= request.maxEdges) {
+          edgeLimitReached = true;
+          return;
+        }
+        edges.set(key, edge);
+      };
+      for (const from of records) {
+        for (const reference of from.references) {
+          addEdge({
+            relation: "references",
+            from: symbol(from),
+            to: guidTargets.get(reference.guid) === undefined ? unresolved : symbol(guidTargets.get(reference.guid)!),
+            evidence: graphEvidence(from, reference.line),
+          });
+        }
+        for (const targetPath of batch.get(from.path) ?? []) {
+          const target = recordsByPath.get(targetPath);
+          addEdge({
+            relation: "asset_database_dependency",
+            from: symbol(from),
+            to: target === undefined ? unresolved : symbol(target),
+            evidence: graphEvidence(from, 1),
+          });
+        }
+      }
+      const nodes = [...records]
+        .sort((left, right) => left.path.localeCompare(right.path, "en"))
+        .slice(0, request.maxNodes)
+        .map(symbol);
+      const orderedEdges = [...edges.values()].sort((left, right) =>
+        left.evidence.path.localeCompare(right.evidence.path, "en") ||
+        left.evidence.lineStart - right.evidence.lineStart ||
+        left.relation.localeCompare(right.relation, "en") ||
+        left.from.fullName.localeCompare(right.from.fullName, "en") ||
+        left.to.fullName.localeCompare(right.to.fullName, "en"));
+      return {
+        workerVersion: request.adapterConfig?.unity.mode === "batch" ? "unity-batch/1.0.0" : "unity-yaml/1.0.0",
+        nodes,
+        results: orderedEdges,
+        diagnostics: {
+          filesRequested: request.files.length,
+          filesLoaded: records.length,
+          filesSkipped: 0,
+          partial: false,
+          elapsedMs: Date.now() - startedAt,
+          messages: request.adapterConfig?.unity.mode === "batch" ? ["Unity batch bridge dependencies included"] : [],
+        },
+        truncated: records.length > request.maxNodes || edgeLimitReached,
+      };
     },
   };
 }

@@ -6,8 +6,8 @@
 
 `project-context-mcp` is an evidence-first local MCP server and CLI for navigating
 codebases. It performs deterministic status checks, exact and semantic search,
-bounded source reads, optional source-backed tracing adapters, and explicit
-handoff access.
+source-grounded GraphRAG, bounded source reads, optional source-backed tracing
+adapters, and explicit handoff access.
 
 It is designed to keep source evidence local: the tool talks only to the local
 or self-hosted services you configure. Search results include source paths and
@@ -19,6 +19,7 @@ line ranges so an agent or developer can verify the underlying code.
 | --- | --- |
 | Exact search | Fast, deterministic `rg` search with configured source and exclusion rules. |
 | Semantic search | Project-isolated embeddings in a persistent local vector store by default, validated against current file hashes. |
+| GraphRAG | `auto` code search expands verified vector seeds through a bounded, persisted source graph and can attach a source-citable project-to-directory hierarchy. |
 | Graph tracing | Optional language adapters return source-backed callers, callees, inheritance, and implementation relationships. |
 | Bounded reads | Reads only configured project files and returns a limited source range. |
 | Handoffs | Lists, reads, creates, and updates explicit Markdown handoff documents safely. |
@@ -109,6 +110,10 @@ vector store by default and does not require Milvus. Exact search, bounded
 reads, status checks, and handoff access do not require Ollama or Milvus.
 `context_trace` does not require either service.
 
+After upgrading to 2.5.0 or later, run `pctx index <project-root>` once to
+create the source-graph snapshot. Until a compatible adapter produces a fresh
+snapshot, `auto` search remains available and uses the existing semantic path.
+
 ## Trace adapters
 
 `context_trace` and `project-context-mcp trace` use an installed trace adapter.
@@ -133,6 +138,22 @@ a concrete target path and then, when needed, from exact-search result
 extensions. Pass an optional language after `max-results` to the CLI search or
 trace command, or the optional `language` field to `context_search` or
 `context_trace`.
+
+During indexing, adapters that expose a whole-project graph builder create a
+separate language shard. The core currently includes builders for TypeScript and
+JavaScript, C# via Roslyn, and Unity assets. The shard is tied to the same
+commit and vector collection as the semantic index; GraphRAG checks current file
+hashes again before returning an expanded symbol. Trace-only third-party
+adapters remain compatible and simply do not contribute a GraphRAG shard.
+
+When graph data is available, indexing also builds an immutable hierarchy
+sidecar from project, configured code-root, and directory modules. It contains
+only node, edge, and source locators; no LLM-generated summary text or source
+excerpts are stored. `auto` search returns optional `graph.summaries` only when
+the hierarchy fingerprint, index identity, commit, graph checksum, and current
+source hashes all still match. Missing, stale, or invalid hierarchy data is
+silently omitted while ordinary semantic and graph-backed evidence remains
+available. Reindex after upgrading to refresh graph and hierarchy snapshots.
 
 The Unity adapter is named `project-context-mcp-unity`. Its YAML mode follows
 prefab, scene, ScriptableObject, `.meta` GUID, `.asmdef`, and `.asmref` links.
@@ -278,9 +299,9 @@ adapters:
 | Command | Purpose |
 | --- | --- |
 | `pctx status [project-root]` | Check configuration, dependencies, and index freshness. |
-| `pctx index <project-root> [--rebuild]` | Create or incrementally update the semantic index. |
+| `pctx index <project-root> [--rebuild]` | Create or incrementally update the semantic index and available source-graph snapshots. |
 | `pctx watch <project-root> [interval-ms]` | Keep an index current with filesystem events and safety scans. |
-| `pctx search <project-root> <query> [mode] [scope] [max-results] [language]` | Search in `auto`, `exact`, `graph`, or `semantic` mode, with an optional graph-adapter language. |
+| `pctx search <project-root> <query> [mode] [scope] [max-results] [language]` | Search in `auto`, `exact`, `graph`, or `semantic` mode. `auto` uses GraphRAG for natural-language code queries when a fresh graph snapshot is available. |
 | `pctx trace <project-root> <symbol> <direction> [max-results] [language]` | Trace relationships with an installed language adapter. |
 | `pctx impact <project-root> <path> [max-results] [language]` | Rank files that historically change with a project file. |
 | `pctx read <project-root> <path> [start-line] [end-line]` | Read an allowed, bounded file range. |

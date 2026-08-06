@@ -72,6 +72,39 @@ export interface TraceAdapterResponse {
   truncated: boolean;
 }
 
+/**
+ * A whole-project, source-backed graph.  Graph snapshots intentionally keep
+ * only edge locations, rather than source excerpts, because the core reads
+ * current source again before returning GraphRAG evidence.
+ */
+export interface TraceAdapterGraphEdge {
+  relation: string;
+  from: TraceSymbol;
+  to: TraceSymbol;
+  evidence: Pick<
+    TraceAdapterEvidence,
+    "path" | "lineStart" | "lineEnd" | "fileHash"
+  >;
+  metadata?: TraceAdapterMetadata;
+}
+
+export interface TraceAdapterGraphRequest {
+  projectRoot: string;
+  files: string[];
+  auxiliaryFiles: string[];
+  maxNodes: number;
+  maxEdges: number;
+  adapterConfig?: TraceAdapterRequest["adapterConfig"];
+}
+
+export interface TraceAdapterGraphResponse {
+  workerVersion: string;
+  nodes: TraceSymbol[];
+  results: TraceAdapterGraphEdge[];
+  diagnostics: TraceDiagnostics;
+  truncated: boolean;
+}
+
 export interface TraceAdapterProbeResult {
   available: boolean;
   detail: string;
@@ -87,6 +120,8 @@ export interface TraceAdapter {
   auxiliaryFileExtensions?: readonly string[];
   probe(): Promise<TraceAdapterProbeResult>;
   trace(request: TraceAdapterRequest): Promise<TraceAdapterResponse>;
+  /** Optional so existing third-party trace-only adapters remain compatible. */
+  buildGraph?(request: TraceAdapterGraphRequest): Promise<TraceAdapterGraphResponse>;
 }
 
 export class TraceAdapterError extends Error {

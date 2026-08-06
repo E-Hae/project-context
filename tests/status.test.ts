@@ -140,6 +140,8 @@ test("collectProjectStatus does not degrade when no trace adapter is installed",
     assert.deepEqual(status.components.trace.adapters, []);
     assert.equal(status.index.state, "ready");
     assert.equal(status.index.stale, false);
+    assert.equal(status.index.graph.state, "missing");
+    assert.equal(status.index.graph.summary.state, "missing");
     assert.deepEqual(status.missing, []);
 
     collectionLoadState = "LoadStateLoading";

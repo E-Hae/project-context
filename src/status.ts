@@ -16,6 +16,12 @@ import {
   isCompatibleIndexState,
   loadProjectIndexState,
 } from "./index-state.js";
+import {
+  graphManifestFingerprint,
+  loadGraphShard,
+  loadProjectGraph,
+} from "./graph-store.js";
+import { loadProjectSummary, loadProjectSummaryPayload } from "./summary-store.js";
 import { MilvusRestClient } from "./milvus-rest-client.js";
 import {
   discoverTraceAdapters,
@@ -78,6 +84,24 @@ export interface ProjectStatus {
     stale: boolean | null;
     collectionName: string | null;
     errors: string[];
+    graph: {
+      state: "not_initialized" | "ready" | "stale" | "invalid" | "missing";
+      indexedAt: string | null;
+      commit: string | null;
+      languages: string[];
+      errors: string[];
+      summary: {
+        state: "not_initialized" | "ready" | "stale" | "invalid" | "missing";
+        indexedAt: string | null;
+        commit: string | null;
+        modules: number;
+        nodes: number;
+        edges: number;
+        sources: number;
+        truncated: boolean | null;
+        errors: string[];
+      };
+    };
   };
   missing: string[];
 }
@@ -87,6 +111,24 @@ interface CommandResult {
   stdout: string;
   stderr: string;
   error?: string;
+}
+
+function summaryStatus(
+  state: ProjectStatus["index"]["graph"]["summary"]["state"],
+  details: Partial<Omit<ProjectStatus["index"]["graph"]["summary"], "state">> = {},
+): ProjectStatus["index"]["graph"]["summary"] {
+  return {
+    state,
+    indexedAt: null,
+    commit: null,
+    modules: 0,
+    nodes: 0,
+    edges: 0,
+    sources: 0,
+    truncated: null,
+    errors: [],
+    ...details,
+  };
 }
 
 export interface StatusDependencies {
@@ -480,6 +522,14 @@ function unavailableStatus(requestedPath: string, checkedAt: string): ProjectSta
       stale: null,
       collectionName: null,
       errors: [],
+      graph: {
+        state: "not_initialized",
+        indexedAt: null,
+        commit: null,
+        languages: [],
+        errors: [],
+        summary: summaryStatus("not_initialized"),
+      },
     },
     missing: ["project"],
   };
@@ -593,6 +643,14 @@ export async function collectProjectStatus(
         stale: null,
         collectionName: identity.collectionName,
         errors: [],
+        graph: {
+          state: "not_initialized" as const,
+          indexedAt: null,
+          commit: null,
+          languages: [],
+          errors: [],
+          summary: summaryStatus("not_initialized"),
+        },
       }
     : !loadedIndex.valid || loadedIndex.value === null
       ? {
@@ -602,6 +660,14 @@ export async function collectProjectStatus(
           stale: true,
           collectionName: identity.collectionName,
           errors: loadedIndex.errors,
+          graph: {
+            state: "invalid" as const,
+            indexedAt: null,
+            commit: null,
+            languages: [],
+            errors: ["Semantic index is unavailable"],
+            summary: summaryStatus("invalid", { errors: ["Semantic index is unavailable"] }),
+          },
         }
       : (() => {
           const stale =
@@ -618,6 +684,14 @@ export async function collectProjectStatus(
             stale,
             collectionName: loadedIndex.value.collectionName,
             errors: [],
+            graph: {
+              state: "missing" as const,
+              indexedAt: null,
+              commit: null,
+              languages: [],
+              errors: [],
+              summary: summaryStatus("missing"),
+            },
           };
         })();
   if (index.state === "ready" && (!usesMilvus || milvus.state === "ready")) {
@@ -660,6 +734,136 @@ export async function collectProjectStatus(
         stale: true,
         errors: [error instanceof Error ? error.message : String(error)],
       };
+    }
+  }
+
+  if (index.state === "invalid") {
+    index = {
+      ...index,
+      graph: {
+        state: "invalid",
+        indexedAt: null,
+        commit: null,
+        languages: [],
+        errors: ["Semantic index is unavailable"],
+        summary: summaryStatus("invalid", { errors: ["Semantic index is unavailable"] }),
+      },
+    };
+  } else if (index.state === "ready" || index.state === "stale") {
+    const loadedGraph = await loadProjectGraph(identity, deps.stateRoot);
+    if (!loadedGraph.exists) {
+      index = {
+        ...index,
+        graph: {
+          state: "missing",
+          indexedAt: null,
+          commit: null,
+          languages: [],
+          errors: [],
+          summary: summaryStatus("missing"),
+        },
+      };
+    } else if (!loadedGraph.valid || loadedGraph.value === null) {
+      index = {
+        ...index,
+        graph: {
+          state: "invalid",
+          indexedAt: null,
+          commit: null,
+          languages: [],
+          errors: loadedGraph.errors,
+          summary: summaryStatus("invalid", { errors: ["Graph snapshot is unavailable"] }),
+        },
+      };
+    } else if (loadedGraph.value.shards.length === 0) {
+      index = {
+        ...index,
+        graph: {
+          state: "missing",
+          indexedAt: null,
+          commit: null,
+          languages: [],
+          errors: [],
+          summary: summaryStatus("missing"),
+        },
+      };
+    } else {
+      const shards = await Promise.all(loadedGraph.value.shards.map((entry) =>
+        loadGraphShard(identity, entry, deps.stateRoot)));
+      const invalidShards = shards.flatMap((shard) => shard.valid ? [] : shard.errors);
+      if (invalidShards.length > 0) {
+        index = {
+          ...index,
+          graph: {
+            state: "invalid",
+            indexedAt: null,
+            commit: null,
+            languages: [],
+            errors: invalidShards,
+            summary: summaryStatus("invalid", { errors: ["Graph shards are unavailable"] }),
+          },
+        };
+      } else {
+        const graphStale =
+          loadedGraph.value.projectRoot !== projectRoot ||
+          loadedGraph.value.projectSlug !== identity.projectSlug ||
+          loadedGraph.value.collectionName !== identity.collectionName ||
+          loadedGraph.value.indexedAt !== index.indexedAt ||
+          loadedGraph.value.commit !== currentCommit;
+        let summary = summaryStatus("missing");
+        const loadedSummary = await loadProjectSummary(identity, deps.stateRoot);
+        if (!loadedSummary.exists) {
+          summary = summaryStatus("missing");
+        } else if (!loadedSummary.valid || loadedSummary.value === null) {
+          summary = summaryStatus("invalid", { errors: loadedSummary.errors });
+        } else {
+          const summaryStale =
+            graphStale ||
+            loadedSummary.value.projectRoot !== projectRoot ||
+            loadedSummary.value.projectSlug !== identity.projectSlug ||
+            loadedSummary.value.collectionName !== identity.collectionName ||
+            loadedSummary.value.indexedAt !== index.indexedAt ||
+            loadedSummary.value.commit !== currentCommit ||
+            loadedSummary.value.graphFingerprint !== graphManifestFingerprint(loadedGraph.value);
+          const details = {
+            indexedAt: loadedSummary.value.indexedAt,
+            commit: loadedSummary.value.commit,
+            modules: loadedSummary.value.moduleCount,
+            nodes: loadedSummary.value.nodeCount,
+            edges: loadedSummary.value.edgeCount,
+            sources: loadedSummary.value.sourceCount,
+            truncated: loadedSummary.value.truncated,
+          };
+          if (summaryStale) {
+            summary = summaryStatus("stale", {
+              ...details,
+              errors: ["Hierarchy summary does not match the current graph snapshot"],
+            });
+          } else {
+            const payload = await loadProjectSummaryPayload(
+              identity,
+              loadedSummary.value,
+              deps.stateRoot,
+            );
+            summary = payload.valid
+              ? summaryStatus("ready", details)
+              : summaryStatus("invalid", { ...details, errors: payload.errors });
+          }
+        }
+        index = {
+          ...index,
+          graph: {
+            state: graphStale ? "stale" : "ready",
+            indexedAt: loadedGraph.value.indexedAt,
+            commit: loadedGraph.value.commit,
+            languages: loadedGraph.value.shards.map((shard) => shard.language),
+            errors: graphStale
+              ? ["Graph snapshot does not match the current semantic index"]
+              : [],
+            summary,
+          },
+        };
+      }
     }
   }
 
