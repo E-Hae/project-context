@@ -2,6 +2,12 @@
 
 All notable changes to Project Context MCP are documented in this file.
 
+## 2.5.1 - 2026-08-26
+
+### Fixed
+
+- Normalize persisted graph and hierarchy project roots before freshness checks, preventing equivalent Windows path spellings from making newly indexed snapshots appear stale.
+
 ## 2.5.0 - 2026-08-05
 
 ### Added

@@ -10,10 +10,17 @@ import {
   saveProjectIndexState,
 } from "../src/index-state.js";
 import {
+  createGraphShard,
+  graphManifestFingerprint,
+  loadProjectGraph,
+  saveProjectGraph,
+} from "../src/graph-store.js";
+import {
   collectProjectStatus,
   type StatusDependencies,
 } from "../src/status.js";
 import { LocalVectorStore } from "../src/local-vector-store.js";
+import { saveProjectSummary } from "../src/summary-store.js";
 import { writeProjectConfig } from "./project-config-fixture.js";
 
 test("collectProjectStatus returns unavailable for a missing project", async () => {
@@ -196,6 +203,112 @@ test("collectProjectStatus does not degrade when no trace adapter is installed",
 
     assert.equal(failedTcpStatus.components.milvus.state, "unreachable");
     assert.match(failedTcpStatus.components.milvus.detail, /DNS lookup failed/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("collectProjectStatus normalizes Windows graph snapshot roots", {
+  skip: process.platform !== "win32",
+}, async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "project-context-status-"));
+  const stateRoot = path.join(root, "state");
+  const indexedAt = "2026-08-26T00:00:00.000Z";
+  const commit = "0123456789abcdef";
+
+  try {
+    await writeProjectConfig(root, "version: 1\n");
+    const config = (await loadProjectConfig(root)).value;
+    const identity = deriveProjectIndexIdentity(root, config);
+    await saveProjectIndexState(
+      identity,
+      {
+        version: 1,
+        chunkerVersion: 3,
+        projectRoot: root,
+        projectSlug: identity.projectSlug,
+        collectionName: identity.collectionName,
+        vectorStoreBackend: "local",
+        embeddingModel: config.services.ollama.embeddingModel,
+        embeddingDimension: 2,
+        indexedAt,
+        commit,
+        files: {},
+      },
+      stateRoot,
+    );
+    const store = new LocalVectorStore(stateRoot);
+    await store.ensureCollection(identity.collectionName, 2);
+    const shard = createGraphShard("fixture", "fixture-adapter", {
+      workerVersion: "fixture/1.0.0",
+      nodes: [],
+      results: [],
+      diagnostics: {
+        filesRequested: 0,
+        filesLoaded: 0,
+        filesSkipped: 0,
+        partial: false,
+        elapsedMs: 0,
+        messages: [],
+      },
+      truncated: false,
+    });
+    await saveProjectGraph(identity, {
+      projectRoot: root,
+      projectSlug: identity.projectSlug,
+      collectionName: identity.collectionName,
+      indexedAt,
+      commit,
+      shards: [shard],
+      diagnostics: [],
+    }, stateRoot);
+    const graph = await loadProjectGraph(identity, stateRoot);
+    assert.equal(graph.valid, true);
+    await saveProjectSummary(identity, {
+      projectRoot: root,
+      projectSlug: identity.projectSlug,
+      collectionName: identity.collectionName,
+      indexedAt,
+      commit,
+      graphFingerprint: graphManifestFingerprint(graph.value!),
+      modules: [{
+        id: "project",
+        parentId: null,
+        kind: "project",
+        path: null,
+        nodes: [],
+        edges: [],
+        sources: [],
+      }],
+      diagnostics: [],
+      truncated: false,
+    }, stateRoot);
+
+    const status = await collectProjectStatus(root, {
+      dependencies: {
+        runCommand: async (command, args) => {
+          if (command === "git" && args.at(-1) === "--show-toplevel") {
+            return { ok: true, stdout: root.replaceAll("\\", "/"), stderr: "" };
+          }
+          if (command === "git") return { ok: true, stdout: commit, stderr: "" };
+          if (command === "rg") return { ok: true, stdout: "ripgrep 14.1.1", stderr: "" };
+          return { ok: false, stdout: "", stderr: "not found", error: "not found" };
+        },
+        fetch: async () => Response.json({
+          models: [{ name: "nomic-embed-text:v1.5" }],
+        }),
+        stateRoot,
+        discoverTraceAdapters: async () => ({
+          candidates: [],
+          adapters: [],
+          diagnostics: [],
+        }),
+      },
+    });
+
+    assert.equal(status.index.state, "ready");
+    assert.equal(status.index.graph.state, "ready");
+    assert.equal(status.index.graph.summary.state, "ready");
   } finally {
     await rm(root, { recursive: true, force: true });
   }

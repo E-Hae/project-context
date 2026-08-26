@@ -805,7 +805,8 @@ export async function collectProjectStatus(
         };
       } else {
         const graphStale =
-          loadedGraph.value.projectRoot !== projectRoot ||
+          normalizePathForComparison(loadedGraph.value.projectRoot) !==
+            normalizePathForComparison(projectRoot) ||
           loadedGraph.value.projectSlug !== identity.projectSlug ||
           loadedGraph.value.collectionName !== identity.collectionName ||
           loadedGraph.value.indexedAt !== index.indexedAt ||
@@ -819,7 +820,8 @@ export async function collectProjectStatus(
         } else {
           const summaryStale =
             graphStale ||
-            loadedSummary.value.projectRoot !== projectRoot ||
+            normalizePathForComparison(loadedSummary.value.projectRoot) !==
+              normalizePathForComparison(projectRoot) ||
             loadedSummary.value.projectSlug !== identity.projectSlug ||
             loadedSummary.value.collectionName !== identity.collectionName ||
             loadedSummary.value.indexedAt !== index.indexedAt ||
