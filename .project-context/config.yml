@@ -22,6 +22,9 @@ exclude:
   - adapters/**/workers/roslyn/obj/**
   - eval/**
 
+index:
+  reuseMainWorktree: true
+
 services:
   vectorStore:
     backend: local

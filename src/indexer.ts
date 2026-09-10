@@ -44,7 +44,7 @@ import {
   type ProjectContextVectorStore,
   type VectorEntity,
 } from "./vector-store.js";
-import { resolveProjectRoot } from "./project-path.js";
+import { resolveIndexRoot, resolveProjectRoot } from "./project-path.js";
 import { isExcluded, resolveSourceTargets } from "./source-policy.js";
 
 const EMBEDDING_BATCH_SIZE = 64;
@@ -284,6 +284,25 @@ async function collectHandoffSourceFiles(
   }
 }
 
+/**
+ * A linked worktree that reuses the main worktree index must never write to it;
+ * indexing branch content would replace the collection every worktree reads.
+ */
+export async function assertWritableIndexRoot(
+  projectRoot: string,
+  config: ProjectContextConfig,
+): Promise<void> {
+  const indexRoot = await resolveIndexRoot(
+    projectRoot,
+    config.index.reuseMainWorktree,
+  );
+  if (indexRoot !== projectRoot) {
+    throw new Error(
+      `This worktree reuses the main worktree index; index the main worktree at "${indexRoot}" instead`,
+    );
+  }
+}
+
 export async function indexProject(
   projectPath: string,
   options: {
@@ -309,6 +328,7 @@ export async function indexProject(
     throw new Error(`Invalid project config: ${loadedConfig.errors.join("; ")}`);
   }
   const config = loadedConfig.value;
+  await assertWritableIndexRoot(project.root, config);
   const identity = deriveProjectIndexIdentity(project.root, config);
   const releaseLock = await acquireProjectIndexLock(identity, stateRoot);
   const operationStartedAt = dependencies.nowMs();

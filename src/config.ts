@@ -1,9 +1,10 @@
-import { readFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 
 import { parse as parseYaml } from "yaml";
 import { z } from "zod/v4";
 
+import { resolveMainWorktreeRoot } from "./project-path.js";
 import type { VectorStoreBackend } from "./vector-store.js";
 
 export const PROJECT_CONFIG_DIRECTORY = ".project-context";
@@ -38,6 +39,9 @@ export interface ProjectContextConfig {
     };
   };
   exclude: string[];
+  index: {
+    reuseMainWorktree: boolean;
+  };
   services: {
     ollama: {
       url: string;
@@ -75,6 +79,9 @@ export const DEFAULT_CONFIG: ProjectContextConfig = {
     },
   },
   exclude: DEFAULT_EXCLUDES,
+  index: {
+    reuseMainWorktree: false,
+  },
   services: {
     ollama: {
       url: "http://127.0.0.1:11434",
@@ -119,6 +126,12 @@ const rawConfigSchema = z
       .strict()
       .optional(),
     exclude: z.array(z.string().min(1).max(512)).max(256).optional(),
+    index: z
+      .object({
+        reuseMainWorktree: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
     services: z
       .object({
         ollama: z
@@ -191,6 +204,10 @@ function mergeConfig(raw: z.infer<typeof rawConfigSchema>): ProjectContextConfig
       },
     },
     exclude: raw.exclude ?? DEFAULT_CONFIG.exclude,
+    index: {
+      reuseMainWorktree:
+        raw.index?.reuseMainWorktree ?? DEFAULT_CONFIG.index.reuseMainWorktree,
+    },
     services: {
       ollama: {
         url: raw.services?.ollama?.url ?? DEFAULT_CONFIG.services.ollama.url,
@@ -239,6 +256,32 @@ function formatZodErrors(error: z.ZodError): string[] {
 }
 
 export async function loadProjectConfig(
+  projectRoot: string,
+): Promise<LoadedProjectConfig> {
+  const loaded = await readProjectConfig(projectRoot);
+  if (loaded.exists) return loaded;
+
+  // A linked worktree with no configuration of its own is the same project as
+  // its main worktree, so it inherits that tree's configuration instead of
+  // falling back to defaults. A worktree that has its own file keeps it.
+  // Only a linked worktree can inherit, and only a linked worktree keeps a
+  // `.git` file at its root, so no other project pays for the Git lookup.
+  if (!(await isLinkedWorktree(projectRoot))) return loaded;
+  const mainRoot = await resolveMainWorktreeRoot(projectRoot);
+  if (mainRoot === null) return loaded;
+  const inherited = await readProjectConfig(mainRoot);
+  return inherited.exists ? inherited : loaded;
+}
+
+async function isLinkedWorktree(projectRoot: string): Promise<boolean> {
+  try {
+    return (await stat(path.join(projectRoot, ".git"))).isFile();
+  } catch {
+    return false;
+  }
+}
+
+async function readProjectConfig(
   projectRoot: string,
 ): Promise<LoadedProjectConfig> {
   const configPath = path.join(projectRoot, PROJECT_CONFIG_RELATIVE_PATH);

@@ -17,6 +17,7 @@ import type {
   VectorSearchHit,
 } from "../src/milvus-rest-client.js";
 import { searchSemantic } from "../src/semantic-search.js";
+import { createLinkedWorktree, gitAvailable } from "./git-worktree-fixture.js";
 import { writeProjectConfig } from "./project-config-fixture.js";
 
 test("searchSemantic returns one fresh evidence result per file", async () => {
@@ -280,5 +281,124 @@ test("searchSemantic validates handoff evidence from the Markdown source", async
     assert.equal(stale.stale, true);
   } finally {
     await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("searchSemantic reuses the main worktree index from a linked worktree", async (t) => {
+  if (!(await gitAvailable())) return t.skip("git is unavailable");
+  const root = await mkdtemp(path.join(tmpdir(), "project-context-semantic-worktree-"));
+  const stateRoot = path.join(root, "state");
+  const sharedConfig =
+    "version: 1\nsources:\n  code: [src]\n  documents: []\nindex:\n  reuseMainWorktree: true\nservices:\n  ollama:\n    embeddingModel: fixture-embedding\n";
+  try {
+    const { mainRoot, worktreeRoot, mainCommit, worktreeCommit } =
+      await createLinkedWorktree(
+        root,
+        {
+          ".project-context/config.yml": sharedConfig,
+          "src/feature.ts": "export const feature = 1;\n",
+        },
+        {
+          worktreeFiles: {
+            "src/branch-only.ts": "export const branchOnly = 1;\n",
+          },
+        },
+      );
+    assert.notEqual(mainCommit, worktreeCommit);
+    const source = await readFile(path.join(worktreeRoot, "src", "feature.ts"));
+    const fileHash = createHash("sha256").update(source).digest("hex");
+    const config = (await loadProjectConfig(mainRoot)).value;
+    const identity = deriveProjectIndexIdentity(mainRoot, config);
+    await saveProjectIndexState(
+      identity,
+      {
+        version: 1,
+        chunkerVersion: 3,
+        projectRoot: mainRoot,
+        projectSlug: identity.projectSlug,
+        collectionName: identity.collectionName,
+        vectorStoreBackend: "local",
+        embeddingModel: "fixture-embedding",
+        embeddingDimension: 2,
+        indexedAt: "2026-07-14T00:00:00.000Z",
+        commit: mainCommit,
+        files: {
+          "src/feature.ts": { hash: fileHash, source: "code", chunkIds: [] },
+        },
+      },
+      stateRoot,
+    );
+    const embedding: EmbeddingProvider = {
+      model: "fixture-embedding",
+      async probeDimension() { return 2; },
+      async embedDocuments(texts) { return texts.map(() => [1, 0]); },
+      async embedQuery() { return [1, 0]; },
+    };
+    const hit: VectorSearchHit = {
+      id: "e".repeat(64),
+      source: "code",
+      path: "src/feature.ts",
+      lineStart: 1,
+      lineEnd: 1,
+      content: source.toString("utf8"),
+      fileHash,
+      indexedAt: "2026-07-14T00:00:00.000Z",
+      commit: null,
+      score: 0.9,
+    };
+    const store: ProjectContextVectorStore = {
+      async hasCollection() { return true; },
+      async ensureCollection() {},
+      async dropCollection() {},
+      async upsert() {},
+      async deleteIds() {},
+      async search() { return [hit]; },
+    };
+    const options = {
+      stateRoot,
+      dependencies: {
+        createEmbeddingProvider: () => embedding,
+        createVectorStore: () => store,
+        createQueryExpander: () => null,
+        sleep: async () => {},
+      },
+    };
+
+    const result = await searchSemantic(
+      { projectPath: worktreeRoot, query: "feature", scope: "code" },
+      options,
+    );
+    assert.equal(result.results.length, 1);
+    assert.equal(result.results[0]?.path, "src/feature.ts");
+    assert.equal(result.staleResultsSkipped, 0);
+    assert.equal(result.commit, worktreeCommit);
+    assert.equal(result.indexCommit, mainCommit);
+    assert.equal(result.stale, false);
+
+    // A worktree with no configuration of its own inherits the main worktree's.
+    await rm(path.join(worktreeRoot, ".project-context"), {
+      recursive: true,
+      force: true,
+    });
+    const inherited = await searchSemantic(
+      { projectPath: worktreeRoot, query: "feature", scope: "code" },
+      options,
+    );
+    assert.equal(inherited.results.length, 1);
+    assert.equal(inherited.stale, false);
+
+    await writeProjectConfig(
+      worktreeRoot,
+      sharedConfig.replace("index:\n  reuseMainWorktree: true\n", ""),
+    );
+    await assert.rejects(
+      searchSemantic(
+        { projectPath: worktreeRoot, query: "feature", scope: "code" },
+        options,
+      ),
+      /Semantic index is not initialized/,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true, maxRetries: 3 });
   }
 });

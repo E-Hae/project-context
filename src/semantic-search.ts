@@ -22,7 +22,12 @@ import {
   type ProjectContextVectorStore,
   type VectorSearchHit,
 } from "./vector-store.js";
-import { resolvePathInsideProject, resolveProjectRoot } from "./project-path.js";
+import {
+  resolveHeadCommit,
+  resolveIndexRoot,
+  resolvePathInsideProject,
+  resolveProjectRoot,
+} from "./project-path.js";
 import {
   OllamaQueryExpander,
   type QueryExpansionProvider,
@@ -175,7 +180,11 @@ export async function searchSemantic(
     throw new Error(`Invalid project config: ${loadedConfig.errors.join("; ")}`);
   }
   const config = loadedConfig.value;
-  const identity = deriveProjectIndexIdentity(project.root, config);
+  const indexRoot = await resolveIndexRoot(
+    project.root,
+    config.index.reuseMainWorktree,
+  );
+  const identity = deriveProjectIndexIdentity(indexRoot, config);
   const loadedState = await loadProjectIndexState(
     identity,
     options.stateRoot ?? DEFAULT_STATE_ROOT,
@@ -187,7 +196,7 @@ export async function searchSemantic(
     throw new Error(`Semantic index state is invalid: ${loadedState.errors.join("; ")}`);
   }
   const state = loadedState.value;
-  if (!isCompatibleIndexState(state, project.root, config, identity)) {
+  if (!isCompatibleIndexState(state, indexRoot, config, identity)) {
     throw new Error("Semantic index is incompatible with the current configuration; reindex");
   }
 
@@ -349,6 +358,13 @@ export async function searchSemantic(
     });
   }
 
+  // Index freshness is measured against the tree the index was built from, which
+  // is the main worktree when this project reuses its index.
+  const indexRootCommit =
+    indexRoot === project.root
+      ? project.commit
+      : await resolveHeadCommit(indexRoot);
+
   return {
     route: "semantic",
     fallbackUsed: false,
@@ -357,7 +373,7 @@ export async function searchSemantic(
     commit: project.commit,
     indexCommit: state.commit,
     indexedAt: state.indexedAt,
-    stale: state.commit !== project.commit || staleResultsSkipped > 0,
+    stale: state.commit !== indexRootCommit || staleResultsSkipped > 0,
     queryExpansion,
     staleResultsSkipped,
     results,

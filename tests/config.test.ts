@@ -10,6 +10,7 @@ import {
   PROJECT_CONFIG_RELATIVE_PATH,
   loadProjectConfig,
 } from "../src/config.js";
+import { createLinkedWorktree, gitAvailable } from "./git-worktree-fixture.js";
 import { writeProjectConfig } from "./project-config-fixture.js";
 
 test("loadProjectConfig ignores a root-level config file", async () => {
@@ -25,6 +26,7 @@ test("loadProjectConfig ignores a root-level config file", async () => {
     assert.equal(loaded.value.sources.handoff.enabled, false);
     assert.deepEqual(loaded.value.sources.semanticExclude, []);
     assert.equal(loaded.value.services.vectorStore.backend, "local");
+    assert.equal(loaded.value.index.reuseMainWorktree, false);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -132,5 +134,53 @@ test("loadProjectConfig reports unknown keys without throwing", async () => {
     assert.match(loaded.errors.join("\n"), /unknown/i);
   } finally {
     await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("loadProjectConfig reads the main worktree index reuse flag", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "project-context-config-"));
+  try {
+    await writeProjectConfig(root, "version: 1\nindex:\n  reuseMainWorktree: true\n");
+    const loaded = await loadProjectConfig(root);
+
+    assert.equal(loaded.valid, true);
+    assert.deepEqual(loaded.errors, []);
+    assert.equal(loaded.value.index.reuseMainWorktree, true);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("loadProjectConfig inherits the main worktree config when a linked worktree has none", async (t) => {
+  if (!(await gitAvailable())) return t.skip("git is unavailable");
+  const root = await mkdtemp(path.join(tmpdir(), "project-context-config-worktree-"));
+  try {
+    const { mainRoot, worktreeRoot } = await createLinkedWorktree(root, {
+      ".project-context/config.yml":
+        "version: 1\nsources:\n  code: [src]\n  documents: []\nindex:\n  reuseMainWorktree: true\n",
+      "src/feature.ts": "export const feature = 1;\n",
+    });
+
+    // The checkout carries the committed configuration, so drop it first.
+    await rm(path.join(worktreeRoot, ".project-context"), {
+      recursive: true,
+      force: true,
+    });
+    const inherited = await loadProjectConfig(worktreeRoot);
+
+    assert.equal(inherited.exists, true);
+    assert.equal(inherited.valid, true);
+    assert.equal(inherited.path, path.join(mainRoot, PROJECT_CONFIG_RELATIVE_PATH));
+    assert.deepEqual(inherited.value.sources.code, ["src"]);
+    assert.equal(inherited.value.index.reuseMainWorktree, true);
+
+    await writeProjectConfig(worktreeRoot, "version: 1\nsources:\n  code: [lib]\n");
+    const own = await loadProjectConfig(worktreeRoot);
+
+    assert.equal(own.path, path.join(worktreeRoot, PROJECT_CONFIG_RELATIVE_PATH));
+    assert.deepEqual(own.value.sources.code, ["lib"]);
+    assert.equal(own.value.index.reuseMainWorktree, false);
+  } finally {
+    await rm(root, { recursive: true, force: true, maxRetries: 3 });
   }
 });

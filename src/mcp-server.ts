@@ -1,3 +1,7 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod/v4";
@@ -21,13 +25,28 @@ export interface ProjectContextServerOptions {
   search?: typeof searchProject;
 }
 
+const moduleDirectory = path.dirname(fileURLToPath(import.meta.url));
+const PACKAGE_ROOT = path.resolve(moduleDirectory, "..", "..");
+
+function packageVersion(): string {
+  try {
+    const manifest = JSON.parse(
+      readFileSync(path.join(PACKAGE_ROOT, "package.json"), "utf8"),
+    ) as { version?: unknown };
+    if (typeof manifest.version === "string") return manifest.version;
+  } catch {
+    // A server that cannot read its own manifest still has to report a version.
+  }
+  return "0.0.0";
+}
+
 export function createProjectContextServer(
   options: ProjectContextServerOptions = {},
 ): McpServer {
   const server = new McpServer(
     {
       name: "project-context",
-      version: "0.1.0",
+      version: packageVersion(),
     },
     {
       instructions:

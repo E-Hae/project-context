@@ -24,6 +24,10 @@ import {
 import { loadProjectSummary, loadProjectSummaryPayload } from "./summary-store.js";
 import { MilvusRestClient } from "./milvus-rest-client.js";
 import {
+  normalizePathForComparison,
+  parseMainWorktreeRoot,
+} from "./project-path.js";
+import {
   discoverTraceAdapters,
   type TraceAdapterDiscovery,
 } from "./trace-adapter-resolver.js";
@@ -83,6 +87,7 @@ export interface ProjectStatus {
     commit: string | null;
     stale: boolean | null;
     collectionName: string | null;
+    indexRoot: string | null;
     errors: string[];
     graph: {
       state: "not_initialized" | "ready" | "stale" | "invalid" | "missing";
@@ -426,10 +431,6 @@ async function checkTraceAdapters(deps: StatusDependencies): Promise<ComponentSt
   }
 }
 
-function normalizePathForComparison(value: string): string {
-  return path.normalize(value).replace(/[\\/]+$/, "").toLocaleLowerCase("en-US");
-}
-
 async function checkHandoff(
   deps: StatusDependencies,
   projectRoot: string,
@@ -521,6 +522,7 @@ function unavailableStatus(requestedPath: string, checkedAt: string): ProjectSta
       commit: null,
       stale: null,
       collectionName: null,
+      indexRoot: null,
       errors: [],
       graph: {
         state: "not_initialized",
@@ -617,6 +619,38 @@ export async function collectProjectStatus(
           "Git repository or HEAD commit is unavailable",
       };
 
+  // A linked worktree belongs to its main worktree: handoff documents resolve
+  // there whatever the layout is, and so does the index when the project reuses
+  // it. resolveMainWorktreeRoot runs git itself, so status keeps the call behind
+  // deps.runCommand and reuses only the shared porcelain parser.
+  let mainWorktree: string | null = null;
+  if (gitRoot.ok) {
+    const listed = await deps.runCommand(
+      "git",
+      [
+        "-c",
+        `safe.directory=${projectRoot}`,
+        "-C",
+        projectRoot,
+        "worktree",
+        "list",
+        "--porcelain",
+      ],
+      timeoutMs,
+    );
+    const parsed =
+      listed.ok && listed.stdout
+        ? parseMainWorktreeRoot(listed.stdout, projectRoot)
+        : null;
+    if (parsed !== null) {
+      try {
+        mainWorktree = await realpath(parsed);
+      } catch {
+        mainWorktree = path.resolve(parsed);
+      }
+    }
+  }
+
   const usesMilvus = config.value.services.vectorStore.backend === "milvus";
   const [ripgrep, ollama, milvus, trace, handoff] = await Promise.all([
     checkCommand(deps, "rg", ["--version"], timeoutMs),
@@ -628,13 +662,36 @@ export async function collectProjectStatus(
           detail: "Local vector store is selected",
         }),
     checkTraceAdapters(deps),
-    checkHandoff(deps, projectRoot, config.value),
+    checkHandoff(deps, mainWorktree ?? projectRoot, config.value),
   ]);
 
-  const identity = deriveProjectIndexIdentity(projectRoot, config.value);
+  const indexRoot = config.value.index.reuseMainWorktree
+    ? (mainWorktree ?? projectRoot)
+    : projectRoot;
+  const identity = deriveProjectIndexIdentity(indexRoot, config.value);
   const loadedIndex = await loadProjectIndexState(identity, deps.stateRoot);
   const currentCommit =
     commitResult.ok && commitResult.stdout ? commitResult.stdout : null;
+  // Index freshness is measured against the tree the index was built from.
+  const indexCommitResult =
+    indexRoot === projectRoot
+      ? commitResult
+      : await deps.runCommand(
+          "git",
+          [
+            "-c",
+            `safe.directory=${indexRoot}`,
+            "-C",
+            indexRoot,
+            "rev-parse",
+            "HEAD",
+          ],
+          timeoutMs,
+        );
+  const indexCommit =
+    indexCommitResult.ok && indexCommitResult.stdout
+      ? indexCommitResult.stdout
+      : null;
   let index: ProjectStatus["index"] = !loadedIndex.exists
     ? {
         state: "not_initialized" as const,
@@ -642,6 +699,7 @@ export async function collectProjectStatus(
         commit: null,
         stale: null,
         collectionName: identity.collectionName,
+        indexRoot,
         errors: [],
         graph: {
           state: "not_initialized" as const,
@@ -659,6 +717,7 @@ export async function collectProjectStatus(
           commit: null,
           stale: true,
           collectionName: identity.collectionName,
+          indexRoot,
           errors: loadedIndex.errors,
           graph: {
             state: "invalid" as const,
@@ -673,16 +732,17 @@ export async function collectProjectStatus(
           const stale =
             !isCompatibleIndexState(
               loadedIndex.value,
-              projectRoot,
+              indexRoot,
               config.value,
               identity,
-            ) || loadedIndex.value.commit !== currentCommit;
+            ) || loadedIndex.value.commit !== indexCommit;
           return {
             state: stale ? ("stale" as const) : ("ready" as const),
             indexedAt: loadedIndex.value.indexedAt,
             commit: loadedIndex.value.commit,
             stale,
             collectionName: loadedIndex.value.collectionName,
+            indexRoot,
             errors: [],
             graph: {
               state: "missing" as const,
@@ -806,11 +866,11 @@ export async function collectProjectStatus(
       } else {
         const graphStale =
           normalizePathForComparison(loadedGraph.value.projectRoot) !==
-            normalizePathForComparison(projectRoot) ||
+            normalizePathForComparison(indexRoot) ||
           loadedGraph.value.projectSlug !== identity.projectSlug ||
           loadedGraph.value.collectionName !== identity.collectionName ||
           loadedGraph.value.indexedAt !== index.indexedAt ||
-          loadedGraph.value.commit !== currentCommit;
+          loadedGraph.value.commit !== indexCommit;
         let summary = summaryStatus("missing");
         const loadedSummary = await loadProjectSummary(identity, deps.stateRoot);
         if (!loadedSummary.exists) {
@@ -821,11 +881,11 @@ export async function collectProjectStatus(
           const summaryStale =
             graphStale ||
             normalizePathForComparison(loadedSummary.value.projectRoot) !==
-              normalizePathForComparison(projectRoot) ||
+              normalizePathForComparison(indexRoot) ||
             loadedSummary.value.projectSlug !== identity.projectSlug ||
             loadedSummary.value.collectionName !== identity.collectionName ||
             loadedSummary.value.indexedAt !== index.indexedAt ||
-            loadedSummary.value.commit !== currentCommit ||
+            loadedSummary.value.commit !== indexCommit ||
             loadedSummary.value.graphFingerprint !== graphManifestFingerprint(loadedGraph.value);
           const details = {
             indexedAt: loadedSummary.value.indexedAt,

@@ -113,12 +113,75 @@ export async function resolveProjectRoot(
     }
   }
 
-  const commit = await runGit(gitArgs(root, "rev-parse", "HEAD"), timeoutMs);
   return {
     requestedPath,
     root,
-    commit: commit.ok && commit.stdout ? commit.stdout : null,
+    commit: await resolveHeadCommit(root, timeoutMs),
   };
+}
+
+export async function resolveHeadCommit(
+  root: string,
+  timeoutMs = 2_000,
+): Promise<string | null> {
+  const commit = await runGit(gitArgs(root, "rev-parse", "HEAD"), timeoutMs);
+  return commit.ok && commit.stdout ? commit.stdout : null;
+}
+
+export function normalizePathForComparison(value: string): string {
+  return path.normalize(value).replace(/[\\/]+$/, "").toLocaleLowerCase("en-US");
+}
+
+export function parseMainWorktreeRoot(
+  porcelain: string,
+  root: string,
+): string | null {
+  // `git worktree list --porcelain` reports the main worktree first. A bare
+  // repository has no main working tree, so it can share no index.
+  const firstBlock = porcelain.replaceAll("\r\n", "\n").split("\n\n")[0] ?? "";
+  const lines = firstBlock.split("\n");
+  if (lines.some((line) => line.trim() === "bare")) return null;
+  const listed = lines.find((line) => line.startsWith("worktree "));
+  if (listed === undefined) return null;
+  const mainRoot = listed.slice("worktree ".length).trim();
+  if (
+    !mainRoot ||
+    normalizePathForComparison(mainRoot) === normalizePathForComparison(root)
+  ) {
+    return null;
+  }
+  return mainRoot;
+}
+
+/**
+ * Returns the main worktree root when `projectRoot` is a linked worktree, and
+ * null when it is the main worktree, a bare repository, or not a repository.
+ */
+export async function resolveMainWorktreeRoot(
+  projectRoot: string,
+  timeoutMs = 2_000,
+): Promise<string | null> {
+  const listed = await runGit(
+    gitArgs(projectRoot, "worktree", "list", "--porcelain"),
+    timeoutMs,
+  );
+  if (!listed.ok || !listed.stdout) return null;
+  const mainRoot = parseMainWorktreeRoot(listed.stdout, projectRoot);
+  if (mainRoot === null) return null;
+  try {
+    return await realpath(mainRoot);
+  } catch {
+    return path.resolve(mainRoot);
+  }
+}
+
+export async function resolveIndexRoot(
+  projectRoot: string,
+  reuseMainWorktree: boolean,
+  timeoutMs = 2_000,
+): Promise<string> {
+  if (!reuseMainWorktree) return projectRoot;
+  return (await resolveMainWorktreeRoot(projectRoot, timeoutMs)) ?? projectRoot;
 }
 
 export async function resolvePathInsideProject(

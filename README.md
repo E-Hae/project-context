@@ -201,6 +201,35 @@ Exact search and `context_read` retain their existing source policy. Add a path
 to the top-level `exclude` list instead when it must be unavailable to every
 search and read route, including graph tracing.
 
+### Git worktree index reuse
+
+A linked git worktree is a separate project root, so by default it builds its own
+semantic and graph index. Set `index.reuseMainWorktree` when the worktrees of a
+project should read the index that belongs to the main worktree instead.
+
+```yaml
+index:
+  reuseMainWorktree: true
+```
+
+Configuration is read from the worktree's own `.project-context/config.yml`,
+which a checkout normally carries. A linked worktree that has no configuration
+file of its own inherits the main worktree's, so the setting still applies on a
+branch that predates the file or in a project that does not track it.
+
+Only the index is shared. Exact search, `context_read`, and trace adapters keep
+reading the worktree's own files, and semantic evidence is still verified against
+them: results stay available for files the branch has not changed and are dropped
+as stale for files it has changed. `pctx status` reports the tree an index belongs
+to as `index.indexRoot` and measures index freshness against that tree's commit.
+
+`pctx index` and `pctx watch` refuse to run inside such a worktree and name the
+main worktree to index instead, because writing branch content into the shared
+collection would replace the index that every worktree reads.
+
+Handoff documents are not covered by this setting: a linked worktree always
+resolves them against its main worktree.
+
 ### Semantic search services
 
 Semantic search needs an Ollama embedding model that you operate and configure
@@ -245,6 +274,10 @@ sources:
     enabled: true
     projectSlug: example-project
 ```
+
+A session working inside a linked git worktree resolves handoff documents
+against the main worktree, so every worktree of a project reads and writes the
+same handoffs wherever the worktree itself lives.
 
 Add every credential-bearing, generated, or third-party path to `exclude`
 before indexing. The same policy is enforced by exact search, reads, indexing,

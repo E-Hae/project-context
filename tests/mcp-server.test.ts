@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
@@ -333,6 +334,32 @@ test("context_search forwards an optional graph language", async () => {
     });
     assert.equal(result.isError, undefined);
     assert.equal(receivedLanguage, "csharp");
+  } finally {
+    await client.close();
+    await server.close();
+  }
+});
+
+test("the MCP server reports the installed package version", async () => {
+  const packageRoot = path.resolve(
+    path.dirname(fileURLToPath(import.meta.url)),
+    "..",
+    "..",
+  );
+  const manifest = JSON.parse(
+    await readFile(path.join(packageRoot, "package.json"), "utf8"),
+  ) as { version: string };
+  const server = createProjectContextServer();
+  const client = new Client({ name: "project-context-test", version: "0.1.0" });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  await server.connect(serverTransport);
+  await client.connect(clientTransport);
+  try {
+    const reported = client.getServerVersion();
+
+    assert.equal(reported?.name, "project-context");
+    assert.equal(reported?.version, manifest.version);
+    assert.notEqual(manifest.version, "0.0.0");
   } finally {
     await client.close();
     await server.close();

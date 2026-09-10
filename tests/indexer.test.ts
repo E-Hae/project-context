@@ -14,6 +14,7 @@ import { indexProject } from "../src/indexer.js";
 import { createGraphShard, loadProjectGraph } from "../src/graph-store.js";
 import { loadProjectSummary } from "../src/summary-store.js";
 import { deriveProjectIndexIdentity } from "../src/index-state.js";
+import { createLinkedWorktree, gitAvailable } from "./git-worktree-fixture.js";
 import { writeProjectConfig } from "./project-config-fixture.js";
 import type {
   ProjectContextVectorStore,
@@ -888,5 +889,27 @@ test("indexProject reports deterministic phase timings", async () => {
     });
   } finally {
     await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("indexProject refuses to write the shared main worktree index", async (t) => {
+  if (!(await gitAvailable())) return t.skip("git is unavailable");
+  const root = await mkdtemp(path.join(tmpdir(), "project-context-indexer-worktree-"));
+  const stateRoot = path.join(root, "state");
+  try {
+    const { mainRoot, worktreeRoot } = await createLinkedWorktree(root, {
+      ".project-context/config.yml":
+        "version: 1\nsources:\n  code: [src]\n  documents: []\nindex:\n  reuseMainWorktree: true\n",
+      "src/feature.ts": "export const feature = 1;\n",
+    });
+
+    await assert.rejects(
+      indexProject(worktreeRoot, { stateRoot }),
+      (error: Error) =>
+        error.message.includes("reuses the main worktree index") &&
+        error.message.includes(mainRoot),
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true, maxRetries: 3 });
   }
 });

@@ -503,3 +503,125 @@ test("collectProjectStatus degrades when Git metadata is unavailable", async () 
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("collectProjectStatus reports a reused main worktree index as fresh", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "project-context-status-worktree-"));
+  const mainRoot = path.join(root, "main");
+  const worktreeRoot = path.join(mainRoot, ".worktrees", "feature");
+  const stateRoot = path.join(root, "state");
+  const mainCommit = "1111111111111111111111111111111111111111";
+  const branchCommit = "2222222222222222222222222222222222222222";
+  const handoffRoot = path.join(root, "handoff");
+  const sharedConfig = [
+    "version: 1",
+    "sources:",
+    "  code: [src]",
+    "  documents: []",
+    "  handoff:",
+    "    enabled: true",
+    "    projectSlug: fixture",
+    "index:",
+    "  reuseMainWorktree: true",
+    "services:",
+    "  ollama:",
+    "    embeddingModel: fixture-embedding",
+    "",
+  ].join("\n");
+
+  try {
+    await mkdir(path.join(mainRoot, "src"), { recursive: true });
+    await mkdir(path.join(worktreeRoot, "src"), { recursive: true });
+    await writeProjectConfig(mainRoot, sharedConfig);
+    await writeProjectConfig(worktreeRoot, sharedConfig);
+    await mkdir(path.join(handoffRoot, "fixture"), { recursive: true });
+    await writeFile(
+      path.join(handoffRoot, "fixture", ".project-path"),
+      mainRoot,
+      "utf8",
+    );
+    const config = (await loadProjectConfig(mainRoot)).value;
+    const identity = deriveProjectIndexIdentity(mainRoot, config);
+    await saveProjectIndexState(
+      identity,
+      {
+        version: 1,
+        chunkerVersion: 3,
+        projectRoot: mainRoot,
+        projectSlug: identity.projectSlug,
+        collectionName: identity.collectionName,
+        vectorStoreBackend: "local",
+        embeddingModel: "fixture-embedding",
+        embeddingDimension: 2,
+        indexedAt: "2026-07-14T00:00:00.000Z",
+        commit: mainCommit,
+        files: {},
+      },
+      stateRoot,
+    );
+    const store = new LocalVectorStore(stateRoot);
+    await store.ensureCollection(identity.collectionName, 2);
+
+    const runCommand: StatusDependencies["runCommand"] = async (command, args) => {
+      if (command === "rg") return { ok: true, stdout: "ripgrep 14.1.1", stderr: "" };
+      if (command !== "git") {
+        return { ok: false, stdout: "", stderr: "not found", error: "not found" };
+      }
+      const cwd = args[3] ?? "";
+      const verb = args.slice(4).join(" ");
+      if (verb === "rev-parse --show-toplevel") {
+        return { ok: true, stdout: cwd, stderr: "" };
+      }
+      if (verb === "worktree list --porcelain") {
+        return {
+          ok: true,
+          stdout: `worktree ${mainRoot}\n\nworktree ${worktreeRoot}`,
+          stderr: "",
+        };
+      }
+      if (verb === "rev-parse HEAD") {
+        return {
+          ok: true,
+          stdout: cwd === mainRoot ? mainCommit : branchCommit,
+          stderr: "",
+        };
+      }
+      return { ok: false, stdout: "", stderr: "unexpected", error: "unexpected" };
+    };
+    const dependencies = {
+      runCommand,
+      fetch: (async () =>
+        Response.json({ models: [{ name: "fixture-embedding" }] })) as typeof fetch,
+      probeTcp: async () => true,
+      handoffRoot,
+      stateRoot,
+      discoverTraceAdapters: async () => ({
+        candidates: [],
+        adapters: [],
+        diagnostics: [],
+      }),
+    };
+
+    const status = await collectProjectStatus(worktreeRoot, { dependencies });
+
+    assert.equal(status.index.indexRoot, mainRoot);
+    assert.equal(status.index.collectionName, identity.collectionName);
+    assert.equal(status.index.state, "ready");
+    assert.equal(status.index.stale, false);
+    assert.equal(status.project.gitCommit, branchCommit);
+    assert.equal(status.components.handoff.state, "ready");
+    assert.deepEqual(status.missing, []);
+
+    await writeProjectConfig(
+      worktreeRoot,
+      sharedConfig.replace("index:\n  reuseMainWorktree: true\n", ""),
+    );
+    const isolated = await collectProjectStatus(worktreeRoot, { dependencies });
+
+    assert.equal(isolated.index.indexRoot, worktreeRoot);
+    assert.equal(isolated.index.state, "not_initialized");
+    // Handoff resolution follows the main worktree with or without index reuse.
+    assert.equal(isolated.components.handoff.state, "ready");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});

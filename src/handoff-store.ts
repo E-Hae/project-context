@@ -16,7 +16,10 @@ import path from "node:path";
 
 import { parse as parseYaml } from "yaml";
 
-import { resolveProjectRoot } from "./project-path.js";
+import {
+  resolveMainWorktreeRoot,
+  resolveProjectRoot,
+} from "./project-path.js";
 
 export const DEFAULT_HANDOFF_ROOT = path.join(
   homedir(),
@@ -199,17 +202,10 @@ async function registeredProjects(
 }
 
 async function projectRootWithWorktreeGuard(projectPath: string): Promise<string> {
+  // A session working inside a linked worktree belongs to the main project, so
+  // handoffs resolve against the main worktree whatever the worktree layout is.
   const project = await resolveProjectRoot(projectPath);
-  const normalized = project.root.replaceAll("\\", "/");
-  const worktreeSegment = normalized.toLocaleLowerCase("en-US").indexOf("/.worktrees/");
-  if (worktreeSegment < 0) return project.root;
-
-  const mainRoot = normalized.slice(0, worktreeSegment);
-  try {
-    return await realpath(mainRoot);
-  } catch {
-    return path.resolve(mainRoot);
-  }
+  return (await resolveMainWorktreeRoot(project.root)) ?? project.root;
 }
 
 async function resolveTargetProject(

@@ -1,6 +1,8 @@
 import { watch } from "node:fs";
 
+import { loadProjectConfig } from "./config.js";
 import {
+  assertWritableIndexRoot,
   indexProject,
   type IndexSummary,
 } from "./indexer.js";
@@ -28,6 +30,7 @@ interface FileWatcher {
 
 interface WatchDependencies {
   indexProject: typeof indexProject;
+  loadProjectConfig: typeof loadProjectConfig;
   resolveProjectRoot: typeof resolveProjectRoot;
   createWatcher: (
     projectRoot: string,
@@ -89,6 +92,7 @@ export async function watchProject(
   }
   const dependencies: WatchDependencies = {
     indexProject,
+    loadProjectConfig,
     resolveProjectRoot,
     createWatcher,
     wait,
@@ -97,6 +101,12 @@ export async function watchProject(
     now: () => new Date(),
     ...options.dependencies,
   };
+  const watched = await dependencies.resolveProjectRoot(projectPath);
+  const watchedConfig = await dependencies.loadProjectConfig(watched.root);
+  if (watchedConfig.valid) {
+    await assertWritableIndexRoot(watched.root, watchedConfig.value);
+  }
+
   let run = 0;
 
   let watcher: FileWatcher | undefined;

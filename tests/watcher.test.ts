@@ -1,11 +1,16 @@
 import assert from "node:assert/strict";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import test from "node:test";
 
+import { DEFAULT_CONFIG } from "../src/config.js";
 import type { IndexSummary } from "../src/indexer.js";
 import {
   watchProject,
   type WatchEvent,
 } from "../src/watcher.js";
+import { createLinkedWorktree, gitAvailable } from "./git-worktree-fixture.js";
 
 function summary(run: number): IndexSummary {
   return {
@@ -84,6 +89,13 @@ function createHarness() {
         requestedPath: "/fixture/subdirectory",
         root: "/project-root",
         commit: null,
+      }),
+      loadProjectConfig: async (projectRoot: string) => ({
+        path: `${projectRoot}/.project-context/config.yml`,
+        exists: false,
+        valid: true,
+        errors: [],
+        value: DEFAULT_CONFIG,
       }),
       createWatcher: (root: string, onChange: () => void, onError: () => void) => {
         const watcher = new FakeWatcher(onChange, onError);
@@ -344,4 +356,29 @@ test("watchProject rejects an unsafe safety interval", async () => {
     watchProject("/fixture", { intervalMs: 0 }),
     /Watch interval/,
   );
+});
+
+test("watchProject refuses a worktree that reuses the main worktree index", async (t) => {
+  if (!(await gitAvailable())) return t.skip("git is unavailable");
+  const root = await mkdtemp(path.join(tmpdir(), "project-context-watch-worktree-"));
+  try {
+    const { mainRoot, worktreeRoot } = await createLinkedWorktree(root, {
+      ".project-context/config.yml":
+        "version: 1\nsources:\n  code: [src]\n  documents: []\nindex:\n  reuseMainWorktree: true\n",
+      "src/feature.ts": "export const feature = 1;\n",
+    });
+
+    await assert.rejects(
+      watchProject(worktreeRoot, {
+        intervalMs: 250,
+        stateRoot: path.join(root, "state"),
+        signal: AbortSignal.timeout(5_000),
+      }),
+      (error: Error) =>
+        error.message.includes("reuses the main worktree index") &&
+        error.message.includes(mainRoot),
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true, maxRetries: 3 });
+  }
 });

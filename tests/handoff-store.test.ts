@@ -13,6 +13,26 @@ import {
   saveHandoff,
   updateHandoff,
 } from "../src/handoff-store.js";
+import { createLinkedWorktree, gitAvailable } from "./git-worktree-fixture.js";
+
+async function registerHandoffProject(
+  handoffRoot: string,
+  slug: string,
+  projectRoot: string,
+): Promise<void> {
+  const projectFolder = path.join(handoffRoot, slug);
+  await mkdir(projectFolder, { recursive: true });
+  await writeFile(
+    path.join(projectFolder, ".project-path"),
+    `${projectRoot.replaceAll("\\", "/")}\n`,
+    "utf8",
+  );
+  await writeFile(
+    path.join(projectFolder, "notes_worktree.md"),
+    "---\ntitle: Worktree notes\ndate: 2026-07-14\n---\n\n# Notes\n",
+    "utf8",
+  );
+}
 
 test("handoff store resolves markers case-insensitively and reads Markdown verbatim", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "project-context-handoff-"));
@@ -89,35 +109,39 @@ test("handoff store resolves markers case-insensitively and reads Markdown verba
   }
 });
 
-test("handoff store applies the doc-handoff worktree guard", async () => {
-  const root = await mkdtemp(path.join(tmpdir(), "project-context-worktree-"));
-  const mainRoot = path.join(root, "main-project");
-  const worktreeRoot = path.join(mainRoot, ".worktrees", "feature-1");
-  const handoffRoot = path.join(root, "handoff");
-  const projectFolder = path.join(handoffRoot, "main-project");
-  try {
-    await mkdir(worktreeRoot, { recursive: true });
-    await mkdir(projectFolder, { recursive: true });
-    await writeFile(
-      path.join(projectFolder, ".project-path"),
-      `${mainRoot.replaceAll("\\", "/")}\n`,
-      "utf8",
-    );
-    await writeFile(
-      path.join(projectFolder, "notes_worktree.md"),
-      "---\ntitle: Worktree notes\ndate: 2026-07-14\n---\n\n# Notes\n",
-      "utf8",
-    );
+for (const worktreePath of [
+  path.join(".worktrees", "feature-1"),
+  path.join(".claude", ".worktrees", "feature-1"),
+  path.join("nested", "trees", "feature-1"),
+]) {
+  test(`handoff store resolves the main project from a worktree at ${worktreePath}`, async (t) => {
+    if (!(await gitAvailable())) return t.skip("git is unavailable");
+    const root = await mkdtemp(path.join(tmpdir(), "project-context-worktree-"));
+    const handoffRoot = path.join(root, "handoff");
+    try {
+      const { mainRoot, worktreeRoot } = await createLinkedWorktree(
+        root,
+        { "src/feature.ts": "export const feature = 1;\n" },
+        { worktreePath },
+      );
+      await registerHandoffProject(handoffRoot, "main-project", mainRoot);
 
-    const result = await listHandoffs(
-      { projectPath: worktreeRoot },
-      { handoffRoot },
-    );
-    assert.equal(result.projects[0]!.projectSlug, "main-project");
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
-});
+      const listed = await listHandoffs(
+        { projectPath: worktreeRoot },
+        { handoffRoot },
+      );
+      assert.equal(listed.projects[0]!.projectSlug, "main-project");
+
+      const document = await getHandoff(
+        { projectPath: worktreeRoot, label: "notes_worktree" },
+        { handoffRoot },
+      );
+      assert.equal(document.title, "Worktree notes");
+    } finally {
+      await rm(root, { recursive: true, force: true, maxRetries: 3 });
+    }
+  });
+}
 
 test("handoff store creates, replaces, and appends documents safely", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "project-context-handoff-write-"));

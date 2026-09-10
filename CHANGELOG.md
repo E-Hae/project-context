@@ -2,6 +2,26 @@
 
 All notable changes to Project Context MCP are documented in this file.
 
+## 2.6.0 - 2026-09-10
+
+### Added
+
+- Added `index.reuseMainWorktree`, which lets a linked git worktree read the semantic and graph index that belongs to the main worktree instead of building its own.
+- `pctx status` now reports the tree an index belongs to as `index.indexRoot` and measures index freshness against that tree's commit.
+- A linked git worktree with no `.project-context/config.yml` of its own now inherits the main worktree's configuration instead of falling back to defaults. A worktree that has its own file keeps it.
+
+### Changed
+
+- `pctx index` and `pctx watch` refuse to run inside a worktree that reuses the main worktree index. They name the main worktree instead of replacing the shared collection with branch content.
+- Handoff documents now resolve a linked worktree's main project through Git instead of matching a `.worktrees/` path segment, so any worktree layout resolves the same handoffs.
+- The published package no longer contains JavaScript source maps. They pointed at TypeScript sources the package never shipped and accounted for nearly half of its unpacked size.
+
+### Fixed
+
+- Handoff documents no longer fail to resolve from a worktree that is not placed directly under `<main>/.worktrees/`, such as `<main>/.claude/.worktrees/<name>`.
+- `pctx status` no longer reports a registered handoff project as missing while a session works inside a linked worktree.
+- The MCP server reports the installed package version to clients instead of a hardcoded `0.1.0`.
+
 ## 2.5.1 - 2026-08-26
 
 ### Fixed

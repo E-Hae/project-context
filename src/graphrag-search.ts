@@ -11,7 +11,12 @@ import {
   DEFAULT_STATE_ROOT,
   deriveProjectIndexIdentity,
 } from "./index-state.js";
-import { resolvePathInsideProject, resolveProjectRoot } from "./project-path.js";
+import {
+  normalizePathForComparison,
+  resolveIndexRoot,
+  resolvePathInsideProject,
+  resolveProjectRoot,
+} from "./project-path.js";
 import type { EvidenceResult, SemanticSearchResult } from "./result-format.js";
 import { searchSemantic } from "./semantic-search.js";
 import {
@@ -168,13 +173,18 @@ export async function searchGraphRag(
   const project = await resolveProjectRoot(input.projectPath);
   const config = await loadProjectConfig(project.root);
   if (!config.valid) return semanticFallback(semantic, input.maxResults);
-  const identity = deriveProjectIndexIdentity(project.root, config.value);
+  const indexRoot = await resolveIndexRoot(
+    project.root,
+    config.value.index.reuseMainWorktree,
+  );
+  const identity = deriveProjectIndexIdentity(indexRoot, config.value);
   const stateRoot = options.stateRoot ?? DEFAULT_STATE_ROOT;
   const loadedManifest = await dependencies.loadProjectGraph(identity, stateRoot);
   if (!loadedManifest.valid || loadedManifest.value === null) return semanticFallback(semantic, input.maxResults);
   const manifest = loadedManifest.value;
   if (
-    manifest.projectRoot !== project.root ||
+    normalizePathForComparison(manifest.projectRoot) !==
+      normalizePathForComparison(indexRoot) ||
     manifest.projectSlug !== identity.projectSlug ||
     manifest.collectionName !== identity.collectionName ||
     manifest.indexedAt !== semantic.indexedAt ||
@@ -187,7 +197,8 @@ export async function searchGraphRag(
   const loadedSummary = await dependencies.loadProjectSummary(identity, stateRoot);
   if (
     loadedSummary.valid && loadedSummary.value !== null &&
-    loadedSummary.value.projectRoot === project.root &&
+    normalizePathForComparison(loadedSummary.value.projectRoot) ===
+      normalizePathForComparison(indexRoot) &&
     loadedSummary.value.projectSlug === identity.projectSlug &&
     loadedSummary.value.collectionName === identity.collectionName &&
     loadedSummary.value.indexedAt === semantic.indexedAt &&
