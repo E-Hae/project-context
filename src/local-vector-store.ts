@@ -2,6 +2,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 
+import type { SourceKind } from "./source-policy.js";
 import type {
   ProjectContextVectorStore,
   VectorEntity,
@@ -209,6 +210,7 @@ export class LocalVectorStore implements ProjectContextVectorStore {
     collectionName: string,
     vector: number[],
     limit: number,
+    source?: SourceKind,
   ): Promise<VectorSearchHit[]> {
     if (!Number.isInteger(limit) || limit < 1 || limit > 200) {
       throw new Error("Local vector search limit must be between 1 and 200");
@@ -217,6 +219,7 @@ export class LocalVectorStore implements ProjectContextVectorStore {
     if (collection === null) throw new Error("Local vector collection is missing");
     validateVector(vector, collection.dimension);
     return collection.entities
+      .filter((entity) => source === undefined || entity.source === source)
       .map((entity) => ({
         id: entity.id,
         source: entity.source,

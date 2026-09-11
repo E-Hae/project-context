@@ -29,6 +29,7 @@ export interface SearchRouteDecision {
 export type HybridSearchResult =
   | ExactSearchResult
   | SemanticSearchResult
+  | GraphRagSearchResult
   | GraphTraceResult
   | (Omit<SemanticSearchResult, "fallbackUsed"> & { fallbackUsed: true });
 
@@ -55,12 +56,93 @@ export class HybridSearchError extends Error {
   }
 }
 
+// Cues stay specific: "X를 사용하는 방법" or "HTTP calls" are ordinary
+// questions for GraphRAG, not a reason to run an adapter trace.
 const STRUCTURAL_PATTERN =
-  /호출|상속|구현|이어지|연결|참조|의존|생성하|발행자|구독|call(?:er|ee| graph)|who calls|inherit|implement|references?|depends?/iu;
-const CALLERS_PATTERN =
-  /호출자|누가\s*호출|(?:무엇|뭐|누가|어디서).{0,40}(?:참조|의존)|에\s*(?:참조|의존)하는|callers?|who calls|what\s+references?|who\s+depends?\s+on/iu;
-const INHERITS_PATTERN = /상속|inherits?|base\s+type|derived\s+type/iu;
-const IMPLEMENTS_PATTERN = /구현|implements?|interface/iu;
+  /호출|상속|구현|이어지|연결|참조|의존|생성하|발행자|구독|사용처|(?:사용|이용)(?:되|돼|된)|(?:사용|이용)하는\s*(?:곳|위치|코드|메서드|함수|클래스|부분|파일)|쓰이|쓰는\s*곳|부르는|불리|파생|(?:하위|자식|부모|상위|기반|베이스)\s*(?:클래스|타입)|call(?:er|ee| graph)|(?:who|what|which\s+\w+)\s+calls\b|called\s+by|inherit|implement|references?|depends?|\busages\b|find\s+usages?|subclass|\bderive[sd]?\s+from\b|\bderived\s+(?:types?|class(?:es)?)\b|(?:base|parent)\s+(?:types?|class)|super\s*class|\bextends\b|extended\s+by/iu;
+
+// Direction rules run on the query with the traced symbol replaced by this
+// marker, so that a Korean particle is read against the symbol it follows:
+// "X를 호출하는" asks for callers and "X가 호출하는" asks for callees.
+const SYMBOL_MARKER = "\uE000";
+const M = SYMBOL_MARKER;
+const CALL_VERB = "(?:호출|부르|불러|사용|쓰|참조|의존|이용|연결|생성)";
+
+function rule(alternatives: string[], direction: TraceDirection): readonly [RegExp, TraceDirection] {
+  return [new RegExp(alternatives.join("|"), "iu"), direction];
+}
+
+// The first matching rule wins, so the reverse type relations and incoming
+// references are checked before the forward readings they overlap with.
+const DIRECTION_RULES: ReadonlyArray<readonly [RegExp, TraceDirection]> = [
+  rule(["피호출", "callees?\\b", "outgoing"], "callees"),
+  rule(["(?<!피)호출자", "호출처", "사용처", "참조처", "callers?\\b", "incoming", "usages?\\b"], "callers"),
+  rule([
+    `${M}\\s*(?:을|를)\\s*(?:직접\\s*)?구현`,
+    `${M}\\s+구현\\s*(?:하는|한)`,
+    `${M}\\s*(?:의\\s*)?구현\\s*(?:체|타입|클래스|형식|목록)`,
+    `누가\\s*(?:${M}\\s*(?:을|를)?\\s*)?구현`,
+    "implemented\\s+by",
+    "implementations?\\s+of",
+    "implementers?\\b",
+    `(?:who|what|which\\s+\\w+)\\s+implements?\\s+${M}`,
+    "(?:classes|types|structs)\\s+(?:that|which)\\s+implement",
+  ], "implementedBy"),
+  rule([
+    `${M}\\s*(?:을|를)\\s*(?:직접\\s*)?(?:상속|확장)`,
+    `${M}\\s+(?:상속|확장)\\s*(?:받는|받은|하는|한)`,
+    `${M}\\s*(?:의\\s*)?(?:파생|하위|자식|서브)`,
+    `누가\\s*(?:${M}\\s*(?:을|를)?\\s*)?(?:상속|확장)`,
+    // "derived from X" lists X's subtypes; "X is derived from" asks for its bases.
+    `derived\\s+from\\s+${M}`,
+    "derived\\s+(?:types?|classes?)",
+    "sub-?(?:types?|classes?)\\b",
+    "(?:inherited|extended)\\s+by",
+    "children\\s+of",
+    `(?:who|what|which\\s+\\w+)\\s+(?:inherits?|extends?|derives?)(?:\\s+from)?\\s+${M}`,
+    "(?:classes|types|interfaces)\\s+(?:that|which)\\s+(?:inherit|extend|derive)",
+  ], "derived"),
+  rule([`${M}\\s*에\\s*(?:의존|참조)`, `${M}\\s*(?:을|를).*?${CALL_VERB}`], "callers"),
+  // "X에서 호출되는 메서드" names what runs inside X, so it asks for callees.
+  rule([`${M}\\s*(?:의\\s*)?(?:안|내부|내|속)?\\s*에서`], "callees"),
+  rule([
+    "(?:호출|사용|참조|의존|이용|생성)\\s*(?:되|돼|된|됨)",
+    "불리|불려|불린|쓰이|쓰여|쓰인",
+    // A question word as the subject ("누가", "어떤 메서드가") or a place
+    // ("어디서", "어느 파일에서") asks what reaches the symbol. A bare "에"
+    // does not: in "X는 어디에 의존해?" it names what X depends on.
+    `(?:누가|누구가|무엇이|뭐가|(?:어떤|어느)\\s*\\S+?\\s*(?:이|가)\\s|어디(?:서|에서)|(?:어떤|어느)\\s*\\S+?에서\\s).*?${CALL_VERB}`,
+  ], "callers"),
+  rule([`${M}\\s*(?:이|가|은|는)\\s.*?${CALL_VERB}`], "callees"),
+  rule([
+    `${M}\\s+(?:(?:호출|사용|참조|이용)\\s*(?:하|한|할|해)|부르|부른|불러|쓰는|쓴|(?:호출|사용|참조)\\s*(?:위치|지점))`,
+    "(?:who|what)\\s+(?:calls|uses|references?|invokes|depends\\s+on)",
+    `${M}\\s+(?:is|are|gets?)\\s+(?:called|used|referenced|invoked)`,
+    `references?\\s+to\\s+${M}`,
+    "(?:find|list|show)\\s+(?:all\\s+)?(?:references|usages)",
+  ], "callers"),
+  rule([
+    "상속",
+    "(?:부모|상위|기반|베이스)\\s*(?:클래스|타입)",
+    `${M}\\s+(?:is\\s+|was\\s+)?derive[sd]\\s+from`,
+    "base\\s+(?:types?|class(?:es)?)",
+    "super\\s*class",
+    "parent\\s+(?:types?|class(?:es)?)",
+    "inherits?",
+    "\\bextends?\\b",
+  ], "inherits"),
+  rule(["구현", "implements?", "interfaces?"], "implements"),
+];
+// Adapters differ on whether an interface's base interfaces are inherited or
+// implemented, so an empty type relation also points at the sibling direction.
+const ALTERNATIVE_DIRECTIONS: Readonly<Record<TraceDirection, readonly TraceDirection[]>> = {
+  callers: ["callees"],
+  callees: ["callers"],
+  inherits: ["derived", "implements"],
+  derived: ["inherits", "implementedBy"],
+  implements: ["implementedBy", "inherits"],
+  implementedBy: ["implements", "derived"],
+};
 const PATH_PATTERN = /(?:^|[\\/])[\w .@()\-]+\.[A-Za-z0-9]+(?:$|\s)|\.(?:cs|asmdef|json|ya?ml|md|asset)\b/iu;
 const ERROR_PATTERN = /\b(?:CS\d{4}|0x[0-9a-f]+|[A-Za-z_]\w*(?:Exception|Error))\b|오류|에러/iu;
 const WHOLE_IDENTIFIER_PATTERN =
@@ -82,13 +164,43 @@ const SYMBOL_STOP_WORDS = new Set([
   "interface",
   "where",
   "which",
+  "what",
+  "who",
+  "how",
+  "why",
+  "when",
+  "does",
+  "find",
+  "show",
+  "list",
 ]);
 
-export function extractGraphDirection(query: string): TraceDirection {
-  if (CALLERS_PATTERN.test(query)) return "callers";
-  if (INHERITS_PATTERN.test(query)) return "inherits";
-  if (IMPLEMENTS_PATTERN.test(query)) return "implements";
-  return "callees";
+export function extractGraphDirection(
+  query: string,
+  symbol: string | null = extractGraphSymbol(query),
+): TraceDirection {
+  const masked = symbol
+    ? query
+      .replaceAll(symbol, SYMBOL_MARKER)
+      .replace(new RegExp(`["'\`](${SYMBOL_MARKER})["'\`]`, "gu"), "$1")
+    : query;
+  return DIRECTION_RULES.find(([pattern]) => pattern.test(masked))?.[1] ?? "callees";
+}
+
+/** Keeps an empty graph answer from reading as "nothing is related". */
+function withInferredDirectionHint(result: GraphTraceResult): GraphTraceResult {
+  if (result.results.length > 0) return result;
+  const alternatives = ALTERNATIVE_DIRECTIONS[result.direction]
+    .map((direction) => `"${direction}"`)
+    .join(" or ");
+  const hint = `No ${result.direction} relationships were found for ${result.symbol}. The ${result.direction} direction was inferred from the query text; if the question asked for another relationship, trace again with direction ${alternatives}.`;
+  return {
+    ...result,
+    diagnostics: {
+      ...result.diagnostics,
+      messages: [hint, ...result.diagnostics.messages].slice(0, 20),
+    },
+  };
 }
 
 export function extractGraphSymbol(query: string): string | null {
@@ -130,7 +242,7 @@ export function decideSearchRoute(
       return {
         route: "graph",
         symbol,
-        direction: extractGraphDirection(trimmed),
+        direction: extractGraphDirection(trimmed, symbol),
       };
     }
   }
@@ -155,7 +267,7 @@ function graphRequest(query: string): {
       "invalid_graph_query",
     );
   }
-  return { symbol, direction: extractGraphDirection(query) };
+  return { symbol, direction: extractGraphDirection(query, symbol) };
 }
 
 export async function searchProject(
@@ -279,12 +391,14 @@ export async function searchProject(
     } else {
       try {
         const graph = await traceGraph(decision.symbol, decision.direction);
-        if (graph.results.length > 0 || mode === "graph") return graph;
+        if (graph.results.length > 0) return graph;
+        if (mode === "graph") return withInferredDirectionHint(graph);
       } catch (error) {
         if (
           !(error instanceof GraphTraceError) ||
           (error.code !== "symbol_not_found" &&
-            error.code !== "adapter_unavailable") ||
+            error.code !== "adapter_unavailable" &&
+            error.code !== "unsupported_direction") ||
           mode === "graph"
         ) {
           throw error;

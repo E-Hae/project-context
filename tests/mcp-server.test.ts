@@ -206,6 +206,17 @@ test("context_status is exposed through MCP and returns structured content", asy
     assert.equal(traceContent?.route, "graph");
     assert.equal(traceContent?.workerVersion, "fixture-worker/1.0");
 
+    const derived = await client.callTool({
+      name: "context_trace",
+      arguments: {
+        projectPath: projectRoot,
+        symbol: "Feature",
+        direction: "derived",
+      },
+    });
+    assert.equal(derived.isError, undefined);
+    assert.equal((derived.structuredContent as { direction?: unknown }).direction, "derived");
+
     const handoffs = await client.callTool({
       name: "context_handoff_list",
       arguments: { projectPath: projectRoot },

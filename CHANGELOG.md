@@ -2,6 +2,35 @@
 
 All notable changes to Project Context MCP are documented in this file.
 
+## 2.7.0 - 2026-09-11
+
+Released together with `project-context-mcp-csharp`, `project-context-mcp-typescript`, and `project-context-mcp-unity` 1.2.0, which require this core version.
+
+### Added
+
+- Added the `derived` and `implementedBy` trace directions, which return the types that inherit a class or implement an interface. The C# and TypeScript adapters support them.
+- Trace adapters can declare `supportedDirections`. The core rejects any other direction with `unsupported_direction` instead of sending it; an adapter without the field keeps the original four directions.
+- The C# adapter names the symbols that unresolved references use in `diagnostics.metadata.missingNames` and suggests `sources.semanticExclude` when those declarations were excluded (Roslyn worker 0.4.0).
+
+### Changed
+
+- `graph.summaries` in `auto` search is now compact: at most `maxResults` reached modules plus their ancestors, each with node and edge counts and up to three node locators, capped at 16 KiB. Locators no longer carry hashes or graph ids, and the `sources` lists and `staleSourcesSkipped` count are gone, so clients that read those fields need updating. For a six-result query on this repository, the summaries shrank from 229,370 to 3,419 characters.
+- A search whose GraphRAG expansion ran reports `route: "graphrag"` instead of `"semantic"`; clients that match on `route` need updating.
+- Exact search no longer passes `--sort path` to ripgrep, which made ripgrep search single-threaded. It lists matching files in parallel, orders them the way the sorted search did, and reads line evidence from the first files only, so result order and truncation stay the same. In a 12,000-file test, a rare-string search took 0.26 s instead of 1.07 s with a warm cache, and 3.3 s cold where the sorted search exceeded the 15 s timeout. A frequent string now costs a full parallel scan instead of stopping early, and one unreadable file no longer fails a search that found other matches.
+- Semantic search applies `scope` inside the vector query for both the local store and Milvus, so code chunks can no longer crowd documents out of a `documents` search.
+- An explicit trace `language` selects that adapter even when the target's file type is not one of its sources. When the project has no files for that adapter, the trace reports `adapter_unavailable`, so `auto` search still falls back.
+- The C# adapter reports a worker that rejects a direction, as a 0.3.0 worker does for `derived`, as unavailable.
+- The Unity adapter traces a script, texture, or model through its `.meta` file, and returns one result per referencing asset and target with `metadata.occurrences` and `metadata.lines` for repeated references.
+- The Unity adapter declares only `callers` and `callees`; `inherits` and `implements` previously returned callers.
+
+### Fixed
+
+- Graph search reads Korean particles against the traced symbol. `X를 호출하는 곳`, `X 어디서 호출돼?`, `X 호출하는 메서드`, `누가 X 호출해?`, `X 사용처`, and `X를 부르는 곳` now ask for callers instead of callees, and a long asset path no longer hides the reference verb.
+- `X를 상속하는 클래스` and `IFeature 구현 타입` now ask for `derived` and `implementedBy` instead of the base types of X.
+- An empty graph search result names the directions to try instead in its first diagnostics message.
+- Graph search no longer takes the first word of an English question, such as `Who` or `What`, as the traced symbol.
+- An unaccepted target file type now reports which installed adapters exist instead of claiming that no adapter is installed.
+
 ## 2.6.0 - 2026-09-10
 
 ### Added

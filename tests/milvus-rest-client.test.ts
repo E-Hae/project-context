@@ -3,6 +3,18 @@ import test from "node:test";
 
 import { MilvusRestClient } from "../src/milvus-rest-client.js";
 
+test("MilvusRestClient filters a source-scoped search inside the vector query", async () => {
+  const filters: unknown[] = [];
+  const fetchMock: typeof fetch = async (_input, init) => {
+    filters.push((JSON.parse(String(init?.body)) as Record<string, unknown>).filter);
+    return Response.json({ code: 0, data: [] });
+  };
+  const client = new MilvusRestClient({ address: "127.0.0.1:19530" }, fetchMock);
+  await client.search("pc_fixture_abc_v1", [0.1, 0.2, 0.3], 5, "document");
+  await client.search("pc_fixture_abc_v1", [0.1, 0.2, 0.3], 5);
+  assert.deepEqual(filters, ['source == "document"', undefined]);
+});
+
 test("MilvusRestClient creates an isolated cosine collection and parses hits", async () => {
   const endpoints: string[] = [];
   let hasCollection = false;

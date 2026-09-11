@@ -20,6 +20,8 @@ import {
   type SourceTarget,
 } from "./source-policy.js";
 import {
+  DEFAULT_TRACE_DIRECTIONS,
+  TRACE_DIRECTIONS,
   TraceAdapterError,
   type TraceAdapter,
   type TraceAdapterEdge,
@@ -87,6 +89,7 @@ export class GraphTraceError extends Error {
       | "adapter_failed"
       | "adapter_protocol"
       | "trace_language_required"
+      | "unsupported_direction"
       | "symbol_not_found"
       | "ambiguous_symbol",
     readonly candidates: string[] = [],
@@ -142,7 +145,7 @@ const adapterResponseSchema = z
   .object({
     workerVersion: z.string().min(1).max(256),
     symbol: z.string().min(1).max(512),
-    direction: z.enum(["callers", "callees", "inherits", "implements"]),
+    direction: z.enum(TRACE_DIRECTIONS),
     matchedSymbols: z.array(symbolNodeSchema).max(1_000),
     results: z
       .array(
@@ -381,6 +384,14 @@ export async function traceProject(
       "adapter_failed",
     );
   }
+  const supportedDirections: readonly TraceDirection[] =
+    adapter.supportedDirections ?? DEFAULT_TRACE_DIRECTIONS;
+  if (!supportedDirections.includes(input.direction)) {
+    throw new GraphTraceError(
+      `The ${adapter.language} trace adapter does not support the ${input.direction} direction. Supported directions: ${supportedDirections.join(", ")}.`,
+      "unsupported_direction",
+    );
+  }
   const sourceExtensions = new Set(
     adapter.sourceFileExtensions.map((extension) => extension.toLowerCase()),
   );
@@ -404,9 +415,11 @@ export async function traceProject(
     auxiliaryExtensions.has(path.extname(file.relativePath).toLowerCase()),
   );
   if (sourceFiles.length === 0) {
+    // An explicit language can select an adapter the project has no files
+    // for; like a missing adapter, that lets automatic routing fall back.
     throw new GraphTraceError(
       `No configured ${adapter.language} source files are available`,
-      "invalid_request",
+      "adapter_unavailable",
     );
   }
 

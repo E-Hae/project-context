@@ -39,12 +39,11 @@ export class TraceAdapterUnavailableError extends Error {
   constructor(
     readonly language: string | null,
     readonly candidates: string[],
+    message = language === null
+      ? "No compatible trace adapter is installed. Install a language adapter and try again."
+      : `No compatible ${language} trace adapter is installed. Install a compatible trace adapter and try again.`,
   ) {
-    super(
-      language === null
-        ? "No compatible trace adapter is installed. Install a language adapter and try again."
-        : `No compatible ${language} trace adapter is installed. Install a compatible trace adapter and try again.`,
-    );
+    super(message);
     this.name = "TraceAdapterUnavailableError";
   }
 }
@@ -90,6 +89,9 @@ function isTraceAdapter(candidate: unknown): candidate is TraceAdapter {
     (adapter.auxiliaryFileExtensions === undefined ||
       (Array.isArray(adapter.auxiliaryFileExtensions) &&
         adapter.auxiliaryFileExtensions.every((extension) => typeof extension === "string"))) &&
+    (adapter.supportedDirections === undefined ||
+      (Array.isArray(adapter.supportedDirections) &&
+        adapter.supportedDirections.every((direction) => typeof direction === "string"))) &&
     typeof adapter.probe === "function" &&
     typeof adapter.trace === "function"
   );
@@ -222,10 +224,11 @@ export async function resolveTraceAdapter(
 
   const language = normalizedLanguage(selection.language);
   const sourceFileExtensions = normalizedExtensions(selection.sourceFileExtensions);
+  // An explicit language selects its adapter even when the target's extension
+  // is not one of the adapter's sources; the adapter then resolves or rejects
+  // the target itself, as the Unity adapter does for a script's .meta file.
   const matching = discovery.adapters.filter((adapter) => {
-    if (language !== null && !adapterLanguages(adapter).has(language)) {
-      return false;
-    }
+    if (language !== null) return adapterLanguages(adapter).has(language);
     if (sourceFileExtensions.size === 0) return true;
     return adapter.sourceFileExtensions.some((extension) =>
       sourceFileExtensions.has(extension.toLocaleLowerCase("en-US")),
@@ -233,6 +236,13 @@ export async function resolveTraceAdapter(
   });
 
   if (matching.length === 0) {
+    if (language === null) {
+      throw new TraceAdapterUnavailableError(
+        null,
+        discovery.candidates,
+        `No installed trace adapter handles ${[...sourceFileExtensions].join(", ")} files. Installed adapters: ${discovery.adapters.map((adapter) => adapter.language).join(", ")}. Pass a language to choose one.`,
+      );
+    }
     throw new TraceAdapterUnavailableError(language, discovery.candidates);
   }
   if (language === null && matching.length > 1) {

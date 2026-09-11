@@ -129,6 +129,9 @@ export function createUnityTraceAdapter(): TraceAdapter {
     language: "unity",
     languageAliases: ["unity-assets"],
     sourceFileExtensions: UNITY_EXTENSIONS,
+    // Asset references have no type hierarchy; any other direction would be
+    // answered as callers.
+    supportedDirections: ["callers", "callees"],
     async probe() {
       return { available: true, detail: "Unity YAML asset graph analyzer is available", version: "unity-yaml/1.0.0" };
     },
@@ -144,21 +147,36 @@ export function createUnityTraceAdapter(): TraceAdapter {
         guidTargets.set(record.guid, recordsByPath.get(assetPath) ?? record);
       }
       const normalized = request.symbol.replaceAll("\\", "/").toLowerCase();
-      const matched = records.filter((record) => record.path.toLowerCase() === normalized ||
+      let matched = records.filter((record) => record.path.toLowerCase() === normalized ||
         path.basename(record.path, path.extname(record.path)).toLowerCase() === normalized ||
         record.guid === normalized || guidTargets.get(normalized)?.path === record.path);
+      // Scripts, textures, and models are not YAML assets; their GUID lives in
+      // the sibling .meta file, so "Assets/Foo.cs" is traced as "Assets/Foo.cs.meta".
+      if (matched.length === 0) matched = records.filter((record) => record.path.toLowerCase() === `${normalized}.meta`);
       if (matched.length === 0) throw new TraceAdapterError(`Unity asset was not found: ${request.symbol}`, "symbol_not_found");
       const batch = await batchDependencies(request);
-      const edges: TraceAdapterResponse["results"] = [];
-      const addEdge = (from: AssetRecord, to: AssetRecord | null, line: number, relation = "references") => {
-        edges.push({ relation, from: symbol(from), to: to === null ? { name: "unresolved", fullName: "unresolved", signature: "unresolved Unity GUID", kind: "external_asset", path: null, lineStart: null, lineEnd: null, fileHash: null } : symbol(to), evidence: evidence(from, line) });
+      // One asset often references the same target many times (a prefab with
+      // several components of one script), so each from/to pair is one result
+      // whose evidence is the first occurrence and whose metadata lists the rest.
+      const edges = new Map<string, { edge: TraceAdapterResponse["results"][number]; lines: number[] }>();
+      const addEdge = (from: AssetRecord, to: AssetRecord | null, targetKey: string, line: number, relation = "references") => {
+        const key = [relation, from.path, to?.path ?? targetKey].join("\0");
+        const existing = edges.get(key);
+        if (existing !== undefined) {
+          existing.lines.push(line);
+          return;
+        }
+        edges.set(key, {
+          edge: { relation, from: symbol(from), to: to === null ? { name: "unresolved", fullName: "unresolved", signature: "unresolved Unity GUID", kind: "external_asset", path: null, lineStart: null, lineEnd: null, fileHash: null } : symbol(to), evidence: evidence(from, line) },
+          lines: [line],
+        });
       };
       if (request.direction === "callees") {
         for (const from of matched) {
-          for (const reference of from.references) addEdge(from, guidTargets.get(reference.guid) ?? null, reference.line);
+          for (const reference of from.references) addEdge(from, guidTargets.get(reference.guid) ?? null, `guid:${reference.guid}`, reference.line);
           for (const targetPath of batch.get(from.path) ?? []) {
             const to = records.find((record) => record.path === targetPath) ?? null;
-            addEdge(from, to, 1, "asset_database_dependency");
+            addEdge(from, to, `path:${targetPath}`, 1, "asset_database_dependency");
           }
         }
       } else {
@@ -167,15 +185,18 @@ export function createUnityTraceAdapter(): TraceAdapter {
         for (const from of records) {
           for (const reference of from.references) {
             const target = guidTargets.get(reference.guid) ?? null;
-            if ((target !== null && targetPaths.has(target.path)) || targetGuids.has(reference.guid)) addEdge(from, target, reference.line);
+            if ((target !== null && targetPaths.has(target.path)) || targetGuids.has(reference.guid)) addEdge(from, target, `guid:${reference.guid}`, reference.line);
           }
           for (const targetPath of batch.get(from.path) ?? []) {
-            if (targetPaths.has(targetPath)) addEdge(from, records.find((record) => record.path === targetPath) ?? null, 1, "asset_database_dependency");
+            if (targetPaths.has(targetPath)) addEdge(from, records.find((record) => record.path === targetPath) ?? null, `path:${targetPath}`, 1, "asset_database_dependency");
           }
         }
       }
-      const limited = edges.slice(0, request.maxResults);
-      return { workerVersion: request.adapterConfig?.unity.mode === "batch" ? "unity-batch/1.0.0" : "unity-yaml/1.0.0", symbol: request.symbol, direction: request.direction, matchedSymbols: matched.map(symbol), results: limited, truncated: edges.length > limited.length, diagnostics: { filesRequested: request.files.length, filesLoaded: records.length, filesSkipped: 0, partial: false, elapsedMs: Date.now() - startedAt, messages: request.adapterConfig?.unity.mode === "batch" ? ["Unity batch bridge dependencies included"] : [] } };
+      const grouped = [...edges.values()].map(({ edge, lines }) => lines.length === 1
+        ? edge
+        : { ...edge, metadata: { occurrences: lines.length, lines: lines.slice(0, 64).join(",") } });
+      const limited = grouped.slice(0, request.maxResults);
+      return { workerVersion: request.adapterConfig?.unity.mode === "batch" ? "unity-batch/1.0.0" : "unity-yaml/1.0.0", symbol: request.symbol, direction: request.direction, matchedSymbols: matched.map(symbol), results: limited, truncated: grouped.length > limited.length, diagnostics: { filesRequested: request.files.length, filesLoaded: records.length, filesSkipped: 0, partial: false, elapsedMs: Date.now() - startedAt, messages: request.adapterConfig?.unity.mode === "batch" ? ["Unity batch bridge dependencies included"] : [] } };
     },
     async buildGraph(request): Promise<TraceAdapterGraphResponse> {
       const startedAt = Date.now();

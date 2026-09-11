@@ -115,6 +115,43 @@ test("searchExact caps global results and reports truncation", async () => {
   }
 });
 
+test("searchExact keeps sorted ripgrep order while ripgrep searches unsorted", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "project-context-search-order-"));
+  try {
+    await mkdir(path.join(root, "src", "a"), { recursive: true });
+    await mkdir(path.join(root, "lib"), { recursive: true });
+    await writeProjectConfig(root, "version: 1\nsources:\n  code: [src, lib]\n  documents: []\n");
+    await writeFile(path.join(root, "src", "a.cs"), "Needle\n", "utf8");
+    await writeFile(path.join(root, "src", "a", "z.cs"), "Needle\nNeedle\n", "utf8");
+    await writeFile(path.join(root, "src", "B.cs"), "Needle\n", "utf8");
+    await writeFile(path.join(root, "lib", "0.cs"), "Needle\n", "utf8");
+
+    // Targets keep their configured order; inside one, a directory's entries
+    // sort by name, so "a/" comes before "a.cs" and "B" before "a".
+    const all = await searchExact({ projectPath: root, query: "Needle" });
+    assert.deepEqual(all.results.map((item) => `${item.path}:${item.lineStart}`), [
+      "src/B.cs:1",
+      "src/a/z.cs:1",
+      "src/a/z.cs:2",
+      "src/a.cs:1",
+      "lib/0.cs:1",
+    ]);
+    assert.equal(all.truncated, false);
+
+    const limited = await searchExact({ projectPath: root, query: "Needle", maxResults: 2 });
+    assert.deepEqual(limited.results.map((item) => `${item.path}:${item.lineStart}`), [
+      "src/B.cs:1",
+      "src/a/z.cs:1",
+    ]);
+    assert.equal(limited.truncated, true);
+
+    const paths = await searchExact({ projectPath: root, query: "src/" });
+    assert.deepEqual(paths.results.map((item) => item.path), ["src/B.cs", "src/a/z.cs", "src/a.cs"]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("searchExact de-duplicates evidence from overlapping source roots", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "project-context-search-"));
   try {

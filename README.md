@@ -19,8 +19,8 @@ line ranges so an agent or developer can verify the underlying code.
 | --- | --- |
 | Exact search | Fast, deterministic `rg` search with configured source and exclusion rules. |
 | Semantic search | Project-isolated embeddings in a persistent local vector store by default, validated against current file hashes. |
-| GraphRAG | `auto` code search expands verified vector seeds through a bounded, persisted source graph and can attach a source-citable project-to-directory hierarchy. |
-| Graph tracing | Optional language adapters return source-backed callers, callees, inheritance, and implementation relationships. |
+| GraphRAG | `auto` code search expands verified vector seeds through a bounded, persisted source graph and can attach a compact, source-citable project-to-directory hierarchy. |
+| Graph tracing | Optional language adapters return source-backed callers, callees, base types, and the types that inherit or implement a type. |
 | Bounded reads | Reads only configured project files and returns a limited source range. |
 | Handoffs | Lists, reads, creates, and updates explicit Markdown handoff documents safely. |
 
@@ -131,13 +131,36 @@ project's `checkJs` and JSDoc settings; dynamic runtime dispatch can produce
 partial results.
 
 Without a compatible adapter, an explicit trace reports an installation hint.
-Automatic graph routing falls back to semantic search when the symbol is absent
-or tracing is unavailable. Adapter ambiguity stays visible instead of being
-silently replaced by semantic results. Graph search first infers an adapter from
-a concrete target path and then, when needed, from exact-search result
-extensions. Pass an optional language after `max-results` to the CLI search or
-trace command, or the optional `language` field to `context_search` or
-`context_trace`.
+Automatic graph routing falls back to semantic search when the symbol is absent,
+tracing is unavailable, or the adapter does not support the direction. Adapter
+ambiguity stays visible instead of being silently replaced by semantic results.
+Graph search first infers an adapter from a concrete target path and then, when
+needed, from exact-search result extensions. Pass an optional language after
+`max-results` to the CLI search or trace command, or the optional `language`
+field to `context_search` or `context_trace`. An explicit language selects that
+adapter even when the target's file type is not one of its sources, so the
+adapter can resolve the target itself.
+
+Trace directions come in pairs. `callers` and `callees` follow references in
+and out of a symbol. `inherits` and `implements` return the base class and the
+interfaces a type names. `derived` and `implementedBy` invert them and return
+the types that name the target, so a class's `derived` lists its subclasses and
+an interface's `implementedBy` lists its implementations. The adapters classify
+an interface that extends another interface differently: the C# adapter reports
+it under `implements` and `implementedBy`, while the TypeScript adapter follows
+the `extends` keyword and reports it under `inherits` and `derived`. An adapter
+lists the directions it supports in
+`supportedDirections`; the core rejects any other direction with
+`unsupported_direction` rather than sending it. An adapter that predates the
+field is assumed to support `callers`, `callees`, `inherits`, and `implements`.
+
+Graph search infers the direction from the question. Korean questions are read
+against the particle that follows the symbol: `X를 호출하는 곳` and
+`X 어디서 호출돼?` ask for callers, `X가 호출하는 메서드` and
+`X에서 호출되는 메서드` ask for callees, and `X를 상속하는 클래스` asks for
+`derived`. When a graph search returns nothing, its first diagnostics message
+names the directions to try instead, because an inferred direction can be the
+wrong one. Pass `direction` to `context_trace` when it matters.
 
 During indexing, adapters that expose a whole-project graph builder create a
 separate language shard. The core currently includes builders for TypeScript and
@@ -155,10 +178,23 @@ source hashes all still match. Missing, stale, or invalid hierarchy data is
 silently omitted while ordinary semantic and graph-backed evidence remains
 available. Reindex after upgrading to refresh graph and hierarchy snapshots.
 
+`graph.summaries` stays small. It lists at most `maxResults` of the modules
+the expansion reached, most relevant first, together with their ancestors.
+Each module carries its verified node and edge counts and up to three of its
+highest-ranked node locators as a path and line range; hashes and graph ids
+stay in the sidecar. The whole list is capped at 16 KiB. A response whose
+graph expansion ran reports `route: "graphrag"`; one that fell back to plain
+semantic search reports `route: "semantic"`.
+
 The Unity adapter is named `project-context-mcp-unity`. Its YAML mode follows
 prefab, scene, ScriptableObject, `.meta` GUID, `.asmdef`, and `.asmref` links.
 Add Unity `Assets` paths to `sources.code`, then use `unity` as the trace
-language when another adapter also matches the project.
+language when another adapter also matches the project. It supports `callers`
+and `callees`. A script, texture, or model that is not a YAML asset is traced
+through its `.meta` file, so `Assets/Foo.cs` with `language: "unity"` finds the
+assets that reference that script. An asset that references the same target
+several times yields one result: its evidence is the first reference, and
+`metadata.occurrences` and `metadata.lines` record the rest.
 
 ## Project configuration
 
@@ -200,6 +236,13 @@ sources:
 Exact search and `context_read` retain their existing source policy. Add a path
 to the top-level `exclude` list instead when it must be unavailable to every
 search and read route, including graph tracing.
+
+The difference matters for generated code. A type declared only in an excluded
+file does not exist for the C# trace, so every call that names it stays
+unresolved: `callers` returns only some call sites with `partial: true`. The C#
+adapter names such symbols in `diagnostics.metadata.missingNames` and in its
+first diagnostics message. Put generated code that other sources reference,
+such as generated enums, under `sources.semanticExclude` rather than `exclude`.
 
 ### Git worktree index reuse
 
@@ -279,10 +322,10 @@ A session working inside a linked git worktree resolves handoff documents
 against the main worktree, so every worktree of a project reads and writes the
 same handoffs wherever the worktree itself lives.
 
-Add every credential-bearing, generated, or third-party path to `exclude`
-before indexing. The same policy is enforced by exact search, reads, indexing,
-semantic evidence, and C# tracing. The indexer never writes project source
-files.
+Add every credential-bearing or third-party path to `exclude` before indexing,
+and generated code that no other source references. The same policy is
+enforced by exact search, reads, indexing, semantic evidence, and C# tracing.
+The indexer never writes project source files.
 
 `PROJECT_CONTEXT_MILVUS_TOKEN` enables authenticated Milvus access.
 `PROJECT_CONTEXT_STATE_ROOT` and `PROJECT_CONTEXT_HANDOFF_ROOT` redirect local
@@ -335,7 +378,7 @@ adapters:
 | `pctx index <project-root> [--rebuild]` | Create or incrementally update the semantic index and available source-graph snapshots. |
 | `pctx watch <project-root> [interval-ms]` | Keep an index current with filesystem events and safety scans. |
 | `pctx search <project-root> <query> [mode] [scope] [max-results] [language]` | Search in `auto`, `exact`, `graph`, or `semantic` mode. `auto` uses GraphRAG for natural-language code queries when a fresh graph snapshot is available. |
-| `pctx trace <project-root> <symbol> <direction> [max-results] [language]` | Trace relationships with an installed language adapter. |
+| `pctx trace <project-root> <symbol> <direction> [max-results] [language]` | Trace `callers`, `callees`, `inherits`, `implements`, `derived`, or `implementedBy` with an installed language adapter. |
 | `pctx impact <project-root> <path> [max-results] [language]` | Rank files that historically change with a project file. |
 | `pctx read <project-root> <path> [start-line] [end-line]` | Read an allowed, bounded file range. |
 | `pctx handoff save|update ...` | Create or update explicit handoff Markdown. |

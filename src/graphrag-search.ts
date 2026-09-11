@@ -39,7 +39,29 @@ const MAX_TRAVERSED_NODES = 400;
 const GRAPH_HOPS = 2;
 const MAX_NODE_EVIDENCE_LINES = 60;
 const MAX_SUMMARY_OUTPUT_MODULES = 64;
-const MAX_SUMMARY_OUTPUT_EDGES = 1_000;
+const MAX_SUMMARY_NODES_PER_MODULE = 3;
+const MAX_SUMMARY_OUTPUT_BYTES = 16 * 1024;
+
+export interface GraphRagSummaryLocator {
+  path: string;
+  lineStart: number;
+  lineEnd: number;
+}
+
+/**
+ * One hierarchy module the expansion reached. The stored sidecar keeps every
+ * node and edge locator with its hashes; a response keeps only counts and the
+ * highest-ranked node locators, because the evidence was already re-verified.
+ */
+export interface GraphRagSummaryModule {
+  id: string;
+  parentId: string | null;
+  kind: ProjectSummaryModule["kind"];
+  path: string | null;
+  nodeCount: number;
+  edgeCount: number;
+  nodes: GraphRagSummaryLocator[];
+}
 
 export interface GraphRagMetadata {
   languages: string[];
@@ -50,14 +72,17 @@ export interface GraphRagMetadata {
   staleEdgesSkipped: number;
   truncated: boolean;
   summaries?: {
-    modules: ProjectSummaryModule[];
+    modules: GraphRagSummaryModule[];
     truncated: boolean;
-    staleSourcesSkipped: number;
   };
 }
 
-/** A semantic response, optionally augmented with verified graph expansion. */
-export interface GraphRagSearchResult extends SemanticSearchResult {
+/**
+ * A semantic response. Its route is `graphrag` when verified graph expansion
+ * ran and `semantic` when the graph snapshot could not be used.
+ */
+export interface GraphRagSearchResult extends Omit<SemanticSearchResult, "route"> {
+  route: "semantic" | "graphrag";
   graph?: GraphRagMetadata;
 }
 
@@ -402,150 +427,130 @@ export async function searchGraphRag(
 
   let summaries: GraphRagMetadata["summaries"];
   if (summaryPayload !== null) {
-    const freshSummarySources = new Map<string, boolean>();
-    let staleSourcesSkipped = 0;
-    const readFreshSummarySource = async (source: SummarySourceLocator): Promise<boolean> => {
-      const key = sourceKey(source);
-      const cached = freshSummarySources.get(key);
-      if (cached !== undefined) return cached;
-      try {
-        if (
-          !isAllowedTextFile(source.path) ||
-          isExcluded(source.path, config.value.exclude)
-        ) throw new Error("summary source is excluded");
-        const resolved = await resolvePathInsideProject(project.root, source.path, true);
-        const sourceKind = classifySource(resolved.absolutePath, targets);
-        if (sourceKind !== "code") throw new Error("summary source is not code");
-        const current = await readIndexableFile(project.root, {
-          source: sourceKind,
-          absolutePath: resolved.absolutePath,
-          relativePath: resolved.relativePath,
-        });
-        const lineCount = current.kind === "ok"
-          ? current.text.replace(/\r\n?/g, "\n").split("\n").length
-          : 0;
-        if (
-          current.kind !== "ok" || current.hash !== source.fileHash ||
-          source.lineStart > lineCount || source.lineEnd > lineCount
-        ) throw new Error("summary source changed");
-        freshSummarySources.set(key, true);
-        return true;
-      } catch {
-        freshSummarySources.set(key, false);
-        staleSourcesSkipped += 1;
-        return false;
-      }
-    };
+    // Every node and edge counted here was re-read by readFreshNode or
+    // readFreshEdge above; a locator only has to match that verified record.
     const freshNodeIds = new Set(
       [...freshNodeTexts.entries()]
         .filter(([, text]) => text !== null)
         .map(([id]) => id),
     );
-    const directModules: ProjectSummaryModule[] = [];
-    let summaryTruncated = summaryPayload.truncated;
-    let emittedEdges = 0;
+    const direct: Array<{ module: GraphRagSummaryModule; score: number }> = [];
     for (const module of summaryPayload.modules) {
-      const selectedNodes: ProjectSummaryModule["nodes"] = [];
-      for (const locator of module.nodes) {
+      const moduleNodes = module.nodes.filter((locator) => {
         const graphNode = nodes.get(locator.id);
-        if (
-          !freshNodeIds.has(locator.id) || graphNode === undefined ||
-          graphNode.path === null || graphNode.lineStart === null ||
-          graphNode.lineEnd === null || graphNode.fileHash === null ||
-          !sameSource(locator, {
+        return freshNodeIds.has(locator.id) && graphNode !== undefined &&
+          graphNode.path !== null && graphNode.lineStart !== null &&
+          graphNode.lineEnd !== null && graphNode.fileHash !== null &&
+          sameSource(locator, {
             path: graphNode.path,
             lineStart: graphNode.lineStart,
             lineEnd: graphNode.lineEnd,
             fileHash: graphNode.fileHash,
-          }) ||
-          !(await readFreshSummarySource(locator))
-        ) continue;
-        selectedNodes.push(locator);
-      }
-      const selectedEdges: ProjectSummaryModule["edges"] = [];
-      for (const locator of module.edges) {
-        if (emittedEdges >= MAX_SUMMARY_OUTPUT_EDGES) {
-          summaryTruncated = true;
-          break;
-        }
+          });
+      });
+      const edgeCount = module.edges.filter((locator) => {
         const graphEdge = edgesById.get(locator.id);
-        if (
-          !freshEdgeIds.has(locator.id) || graphEdge === undefined ||
-          !freshNodeIds.has(locator.fromId) || !freshNodeIds.has(locator.toId) ||
-          graphEdge.relation !== locator.relation ||
-          graphEdge.fromId !== locator.fromId || graphEdge.toId !== locator.toId ||
-          !sameSource(locator.evidence, graphEdge.evidence) ||
-          !(await readFreshSummarySource(locator.evidence))
-        ) continue;
-        selectedEdges.push(locator);
-        emittedEdges += 1;
-      }
-      if (selectedNodes.length === 0 && selectedEdges.length === 0) continue;
-      const selectedSourceKeys = new Set([
-        ...selectedNodes.map(sourceKey),
-        ...selectedEdges.map((edge) => sourceKey(edge.evidence)),
-      ]);
-      const selectedSources: SummarySourceLocator[] = [];
-      for (const source of module.sources) {
-        if (selectedSourceKeys.has(sourceKey(source)) && await readFreshSummarySource(source)) {
-          selectedSources.push(source);
-        }
-      }
-      directModules.push({
-        id: module.id,
-        parentId: module.parentId,
-        kind: module.kind,
-        path: module.path,
-        nodes: selectedNodes,
-        edges: selectedEdges,
-        sources: selectedSources,
+        return freshEdgeIds.has(locator.id) && graphEdge !== undefined &&
+          freshNodeIds.has(locator.fromId) && freshNodeIds.has(locator.toId) &&
+          graphEdge.relation === locator.relation &&
+          graphEdge.fromId === locator.fromId && graphEdge.toId === locator.toId &&
+          sameSource(locator.evidence, graphEdge.evidence);
+      }).length;
+      if (moduleNodes.length === 0 && edgeCount === 0) continue;
+      const ranked = moduleNodes
+        .map((locator) => ({ locator, score: traversed.get(locator.id)?.score ?? 0 }))
+        .sort((left, right) =>
+          right.score - left.score ||
+          left.locator.path.localeCompare(right.locator.path, "en") ||
+          left.locator.lineStart - right.locator.lineStart);
+      direct.push({
+        score: ranked[0]?.score ?? 0,
+        module: {
+          id: module.id,
+          parentId: module.parentId,
+          kind: module.kind,
+          path: module.path,
+          nodeCount: moduleNodes.length,
+          edgeCount,
+          nodes: ranked
+            .slice(0, Math.min(MAX_SUMMARY_NODES_PER_MODULE, input.maxResults))
+            .map(({ locator }) => ({
+              path: locator.path,
+              lineStart: locator.lineStart,
+              lineEnd: locator.lineEnd,
+            })),
+        },
       });
     }
+    // The most relevant modules are placed first, so every bound drops the
+    // least relevant ones: at most maxResults reached modules plus their
+    // ancestors, within a module and a byte budget.
+    direct.sort((left, right) =>
+      right.score - left.score ||
+      right.module.nodeCount - left.module.nodeCount ||
+      left.module.id.localeCompare(right.module.id, "en"));
     const payloadModules = new Map(summaryPayload.modules.map((module) => [module.id, module]));
-    const selectedModules = new Map<string, ProjectSummaryModule>();
-    for (const direct of directModules) {
-      const chain: ProjectSummaryModule[] = [];
+    const selectedModules = new Map<string, GraphRagSummaryModule>();
+    const moduleBytes = (module: GraphRagSummaryModule): number =>
+      Buffer.byteLength(JSON.stringify(module), "utf8") + 1;
+    let summaryTruncated = summaryPayload.truncated;
+    let selectedDirect = 0;
+    let bytes = Buffer.byteLength(JSON.stringify({ modules: [], truncated: false }), "utf8");
+    for (const { module: reached } of direct) {
+      if (selectedDirect >= input.maxResults) {
+        summaryTruncated = true;
+        break;
+      }
+      const chain: GraphRagSummaryModule[] = [];
       const visited = new Set<string>();
-      let current: ProjectSummaryModule | undefined = direct;
+      let current: ProjectSummaryModule | undefined = payloadModules.get(reached.id);
       while (current !== undefined && !visited.has(current.id)) {
         visited.add(current.id);
-        chain.push(current);
+        chain.push(current.id === reached.id
+          ? reached
+          : selectedModules.get(current.id) ?? {
+              id: current.id,
+              parentId: current.parentId,
+              kind: current.kind,
+              path: current.path,
+              nodeCount: 0,
+              edgeCount: 0,
+              nodes: [],
+            });
         current = current.parentId === null ? undefined : payloadModules.get(current.parentId);
       }
-      if (chain.length === 0 || (chain.at(-1)?.parentId !== null)) {
+      if (chain.length === 0 || chain.at(-1)?.parentId !== null) {
         summaryTruncated = true;
         continue;
       }
-      chain.reverse();
-      const additions = chain.filter((module) => !selectedModules.has(module.id));
-      if (selectedModules.size + additions.length > MAX_SUMMARY_OUTPUT_MODULES) {
+      // An ancestor placeholder added for an earlier module is replaced once
+      // that module is reached itself.
+      const additions = chain.filter((module) => selectedModules.get(module.id) !== module);
+      const addedBytes = additions.reduce((total, module) =>
+        total + moduleBytes(module) - (selectedModules.has(module.id) ? moduleBytes(selectedModules.get(module.id)!) : 0), 0);
+      const addedModules = additions.filter((module) => !selectedModules.has(module.id)).length;
+      if (
+        selectedModules.size + addedModules > MAX_SUMMARY_OUTPUT_MODULES ||
+        bytes + addedBytes > MAX_SUMMARY_OUTPUT_BYTES
+      ) {
         summaryTruncated = true;
         continue;
       }
-      for (const ancestor of chain) {
-        if (ancestor.id === direct.id) {
-          selectedModules.set(direct.id, direct);
-        } else if (!selectedModules.has(ancestor.id)) {
-          selectedModules.set(ancestor.id, {
-            id: ancestor.id,
-            parentId: ancestor.parentId,
-            kind: ancestor.kind,
-            path: ancestor.path,
-            nodes: [],
-            edges: [],
-            sources: [],
-          });
-        }
-      }
+      for (const module of additions) selectedModules.set(module.id, module);
+      bytes += addedBytes;
+      selectedDirect += 1;
     }
-    const modules = [...selectedModules.values()];
+    const modules = [...selectedModules.values()].sort((left, right) =>
+      (left.kind === "project" ? -1 : right.kind === "project" ? 1 : 0) ||
+      (left.path ?? "").localeCompare(right.path ?? "", "en") ||
+      left.id.localeCompare(right.id, "en"));
     if (modules.length > 0) {
-      summaries = { modules, truncated: summaryTruncated, staleSourcesSkipped };
+      summaries = { modules, truncated: summaryTruncated };
     }
   }
 
   return {
-    route: "semantic",
+    route: "graphrag",
     fallbackUsed: semantic.fallbackUsed,
     query: semantic.query,
     scope: semantic.scope,

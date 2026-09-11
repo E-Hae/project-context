@@ -124,6 +124,30 @@ test("searchSemantic returns one fresh evidence result per file", async () => {
     assert.equal(result.queryExpansion.identifierQuery, null);
     assert.equal(queryEmbeddingAttempts, 2);
 
+    // A scope narrows the vector query itself, so code cannot crowd documents
+    // out of the nearest-neighbour window.
+    const scopedSources: Array<string | undefined> = [];
+    const scoped = await searchSemantic(
+      { projectPath: root, query: "where is storage?", scope: "documents", maxResults: 5 },
+      {
+        stateRoot,
+        dependencies: {
+          createEmbeddingProvider: () => ({ ...embedding, async embedQuery() { return [1, 0]; } }),
+          createVectorStore: () => ({
+            ...store,
+            async search(_name: string, _vector: number[], _limit: number, source?: "code" | "document") {
+              scopedSources.push(source);
+              return hits.filter((hit) => source === undefined || hit.source === source);
+            },
+          }),
+          createQueryExpander: () => null,
+          sleep: async () => {},
+        },
+      },
+    );
+    assert.deepEqual(scopedSources, ["document"]);
+    assert.deepEqual(scoped.results.map((item) => item.path), ["docs/design.md"]);
+
     const embeddedQueries: string[] = [];
     let searchCalls = 0;
     const fusedResult = await searchSemantic(

@@ -12,6 +12,7 @@ import {
   resolveTraceAdapter,
   TraceAdapterContractError,
   TraceAdapterLanguageRequiredError,
+  TraceAdapterUnavailableError,
 } from "../src/trace-adapter-resolver.js";
 
 function fixtureAdapter(name: string, language: string, extension: string): TraceAdapter {
@@ -89,6 +90,33 @@ test("resolver accepts trace adapter language aliases", async () => {
     },
   );
   assert.equal(selected, adapter);
+});
+
+test("resolver lets an explicit language choose an adapter for a target it does not list", async () => {
+  const csharp = fixtureAdapter("fixture-csharp", "csharp", ".cs");
+  const unity = fixtureAdapter("fixture-unity", "unity", ".meta");
+  const options = {
+    packageNames: ["fixture-csharp", "fixture-unity"],
+    loadModule: async (packageName: string) => ({
+      traceAdapter: packageName === "fixture-csharp" ? csharp : unity,
+    }),
+  };
+  assert.equal(
+    await resolveTraceAdapter({ language: "unity", sourceFileExtensions: [".cs"] }, options),
+    unity,
+  );
+  await assert.rejects(
+    resolveTraceAdapter({ language: "python", sourceFileExtensions: [".py"] }, options),
+    (error: unknown) =>
+      error instanceof TraceAdapterUnavailableError &&
+      /No compatible python trace adapter is installed/u.test(error.message),
+  );
+  await assert.rejects(
+    resolveTraceAdapter({ sourceFileExtensions: [".png"] }, options),
+    (error: unknown) =>
+      error instanceof TraceAdapterUnavailableError &&
+      error.message === "No installed trace adapter handles .png files. Installed adapters: csharp, unity. Pass a language to choose one.",
+  );
 });
 
 test("resolver can resolve a package from an npm-style global node_modules root", async () => {

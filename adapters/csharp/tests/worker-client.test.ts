@@ -11,6 +11,28 @@ test("C# adapter resolves its worker inside the adapter package", () => {
   );
 });
 
+test("C# adapter treats a worker that rejects a direction as unavailable", async () => {
+  const adapter = createCsharpTraceAdapter(
+    async () => ({
+      version: 1,
+      ok: false,
+      error: { code: "invalid_direction", message: "Trace direction is invalid", candidates: [] },
+    }),
+    async () => "project-context-roslyn/0.3.0",
+  );
+  await assert.rejects(
+    adapter.trace({
+      projectRoot: "C:/project",
+      files: ["src/Feature.cs"],
+      auxiliaryFiles: [],
+      symbol: "Feature",
+      direction: "derived",
+      maxResults: 10,
+    }),
+    (error: unknown) => (error as { code?: unknown }).code === "unavailable",
+  );
+});
+
 test("C# adapter probe reports a missing dotnet runtime accurately", async () => {
   const adapter = createCsharpTraceAdapter(
     async () => ({ version: 1, ok: false, error: { code: "failed", message: "unused", candidates: [] } }),

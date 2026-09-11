@@ -144,6 +144,50 @@ test("traceProject reports a clear unavailable-adapter error", async () => {
   );
 });
 
+test("traceProject sends derived and implementedBy only to adapters that declare them", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "project-context-graph-"));
+  try {
+    await mkdir(path.join(root, "src"));
+    await writeProjectConfig(root, "version: 1\nsources:\n  code: [src]\n  documents: []\n");
+    await writeFile(path.join(root, "src", "Feature.cs"), "class Feature {}\n", "utf8");
+    let traced = 0;
+    const legacy = adapter(async (request) => {
+      traced += 1;
+      return {
+        workerVersion: "fixture", symbol: request.symbol, direction: request.direction,
+        matchedSymbols: [], results: [], truncated: false,
+        diagnostics: { ...diagnostics, filesRequested: 1, filesLoaded: 1 },
+      };
+    });
+    await assert.rejects(
+      traceProject({ projectPath: root, symbol: "Feature", direction: "derived" }, { adapter: legacy }),
+      (error: unknown) =>
+        error instanceof GraphTraceError &&
+        error.code === "unsupported_direction" &&
+        /does not support the derived direction/u.test(error.message),
+    );
+    assert.equal(traced, 0);
+
+    const result = await traceProject(
+      { projectPath: root, symbol: "Feature", direction: "derived" },
+      { adapter: { ...legacy, supportedDirections: ["callers", "derived"] } },
+    );
+    assert.equal(result.direction, "derived");
+    assert.equal(traced, 1);
+
+    // An explicitly chosen adapter with nothing to read is unavailable, so
+    // automatic routing can still fall back to semantic search.
+    await assert.rejects(
+      traceProject(
+        { projectPath: root, symbol: "Feature", direction: "callers", language: "unity" },
+        { adapter: { ...legacy, language: "unity", sourceFileExtensions: [".prefab"] } },
+      ),
+      (error: unknown) => error instanceof GraphTraceError && error.code === "adapter_unavailable",
+    );
+    assert.equal(traced, 1);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
 test("traceProject passes candidate source extensions to language-neutral adapter selection", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "project-context-graph-"));
   try {

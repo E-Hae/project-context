@@ -36,6 +36,8 @@ interface RoslynDiagnostics {
   partial: boolean;
   elapsedMs: number;
   messages: string[];
+  /** Absent from workers older than 0.4.0. */
+  missingNames?: string[];
 }
 
 interface RoslynSuccess {
@@ -128,7 +130,10 @@ class CsharpAdapterError extends Error {
 
 function adapterFailureCode(value: string): CsharpAdapterErrorCode {
   if (value === "symbol_not_found" || value === "ambiguous_symbol") return value;
-  if (value === "invalid_request" || value === "invalid_symbol" || value === "invalid_direction") {
+  // The core only sends directions this adapter declares, so a worker that
+  // rejects one predates it (0.3.0 lacks derived and implementedBy).
+  if (value === "invalid_direction") return "unavailable";
+  if (value === "invalid_request" || value === "invalid_symbol") {
     return "invalid_request";
   }
   return "failed";
@@ -152,13 +157,22 @@ function toTraceSymbol(symbol: RoslynSymbol): TraceSymbol {
 }
 
 function toTraceDiagnostics(diagnostics: RoslynDiagnostics): TraceDiagnostics {
+  const missingNames = (diagnostics.missingNames ?? []).join(", ").slice(0, 1_024);
+  // A declaration removed by the project's exclude list leaves every call that
+  // names it unresolved, so name the missing symbols instead of only a count.
+  const messages = missingNames
+    ? [
+        `Unresolved references name symbols that no traced source declares: ${missingNames}. If their declarations are under exclude, move those paths to sources.semanticExclude so tracing still reads them.`,
+        ...diagnostics.messages,
+      ].slice(0, 20)
+    : diagnostics.messages;
   return {
     filesRequested: diagnostics.filesRequested,
     filesLoaded: diagnostics.filesLoaded,
     filesSkipped: diagnostics.filesSkipped,
     partial: diagnostics.partial,
     elapsedMs: diagnostics.elapsedMs,
-    messages: diagnostics.messages,
+    messages,
     metadata: {
       metadataFailures: diagnostics.metadataFailures,
       projectFilesRead: diagnostics.projectFilesRead,
@@ -167,6 +181,7 @@ function toTraceDiagnostics(diagnostics: RoslynDiagnostics): TraceDiagnostics {
       referenceFailures: diagnostics.referenceFailures,
       parseErrors: diagnostics.parseErrors,
       unresolvedCandidates: diagnostics.unresolvedCandidates,
+      ...(missingNames ? { missingNames } : {}),
     },
   };
 }
@@ -180,6 +195,7 @@ export function createCsharpTraceAdapter(
     language: "csharp",
     sourceFileExtensions: [".cs"],
     auxiliaryFileExtensions: [".asmdef"],
+    supportedDirections: ["callers", "callees", "inherits", "implements", "derived", "implementedBy"],
     async probe() {
       try {
         const version = await probeWorker();

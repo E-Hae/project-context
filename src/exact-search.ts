@@ -8,7 +8,9 @@ import {
   classifySource,
   resolveSourceTargets,
   SEARCH_INCLUDE_GLOBS,
+  sourceTargetIndex,
   type SearchScope,
+  type SourceKind,
   type SourceTarget,
 } from "./source-policy.js";
 
@@ -25,6 +27,21 @@ interface RgMatchEvent {
     line_number: number;
   };
 }
+
+interface MatchedFile {
+  source: SourceKind;
+  relativePath: string;
+  key: string;
+  targetIndex: number;
+  segments: Buffer[];
+}
+
+// Windows limits a command line to 32,767 characters; file batches stay well
+// below that after the fixed arguments and the query.
+const MAX_BATCH_PATH_CHARACTERS = 24_000;
+// A frequent term fills the result limit from the first few files, so the
+// first batch stays small instead of reading limit x limit matching lines.
+const FIRST_BATCH_FILES = 16;
 
 function decodeRgText(value: RgText): string | null {
   if (typeof value.text === "string") {
@@ -51,21 +68,8 @@ function uniqueTargetPaths(targets: SourceTarget[]): string[] {
   return values;
 }
 
-function buildRgArgs(
-  query: string,
-  targets: SourceTarget[],
-  excludes: string[],
-): string[] {
-  const args = [
-    "--no-config",
-    "--json",
-    "--fixed-strings",
-    "--line-number",
-    "--color",
-    "never",
-    "--sort",
-    "path",
-  ];
+function globArgs(excludes: string[]): string[] {
+  const args: string[] = [];
   for (const glob of SEARCH_INCLUDE_GLOBS) {
     args.push("--glob", glob);
   }
@@ -75,25 +79,6 @@ function buildRgArgs(
       `!${exclude.replace(/^!+/, "").replaceAll("\\", "/")}`,
     );
   }
-  args.push("--", query, ...uniqueTargetPaths(targets));
-  return args;
-}
-
-function buildRgFilesArgs(
-  targets: SourceTarget[],
-  excludes: string[],
-): string[] {
-  const args = ["--no-config", "--files", "--null", "--sort", "path"];
-  for (const glob of SEARCH_INCLUDE_GLOBS) {
-    args.push("--glob", glob);
-  }
-  for (const exclude of excludes) {
-    args.push(
-      "--glob",
-      `!${exclude.replace(/^!+/, "").replaceAll("\\", "/")}`,
-    );
-  }
-  args.push("--", ...uniqueTargetPaths(targets));
   return args;
 }
 
@@ -107,257 +92,296 @@ function looksLikePath(query: string): boolean {
   );
 }
 
-function runRipgrepPaths(
+function comparisonKey(relativePath: string): string {
+  return process.platform === "win32" ? relativePath.toLowerCase() : relativePath;
+}
+
+/**
+ * Reproduces the order `rg --sort path` used to produce: configured targets in
+ * order, then each directory's entries by UTF-8 name bytes, so a directory's
+ * files come before a sibling file whose name extends the directory name.
+ */
+function compareMatchedFiles(left: MatchedFile, right: MatchedFile): number {
+  if (left.targetIndex !== right.targetIndex) return left.targetIndex - right.targetIndex;
+  for (let index = 0; index < Math.min(left.segments.length, right.segments.length); index += 1) {
+    const order = Buffer.compare(left.segments[index]!, right.segments[index]!);
+    if (order !== 0) return order;
+  }
+  return left.segments.length - right.segments.length;
+}
+
+/**
+ * Streams ripgrep records. ripgrep searches in parallel only when it does not
+ * sort its output, so every caller orders records itself.
+ */
+function streamRipgrep(
   projectRoot: string,
   args: string[],
-  query: string,
-  targets: SourceTarget[],
-  commit: string | null,
-  maxResults: number,
-  timeoutMs: number,
-): Promise<{ results: EvidenceResult[]; truncated: boolean }> {
+  options: {
+    separator: "\n" | "\0";
+    maxRecordLength: number;
+    deadline: number;
+    timeoutMs: number;
+  },
+  onRecord: (record: string) => void,
+): Promise<void> {
   return new Promise((resolve, reject) => {
     const child = spawn("rg", args, {
       cwd: projectRoot,
       shell: false,
       windowsHide: true,
     });
-    const results: EvidenceResult[] = [];
-    const seenPaths = new Set<string>();
-    const normalizedQuery = query.replaceAll("\\", "/");
-    const comparableQuery =
-      process.platform === "win32"
-        ? normalizedQuery.toLowerCase()
-        : normalizedQuery;
-    let stdoutBuffer = "";
+    let buffer = "";
     let stderr = "";
     let settled = false;
-    let stoppedForLimit = false;
     let timedOut = false;
+    let received = 0;
 
-    const finishWithError = (error: Error): void => {
+    const fail = (error: Error): void => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
       child.kill();
       reject(error);
     };
-
-    const processPath = (reportedPath: string): void => {
-      if (!reportedPath || settled || stoppedForLimit) return;
-      const absolutePath = path.isAbsolute(reportedPath)
-        ? path.resolve(reportedPath)
-        : path.resolve(projectRoot, reportedPath);
-      const relativePath = toProjectPath(path.relative(projectRoot, absolutePath));
-      const comparablePath =
-        process.platform === "win32" ? relativePath.toLowerCase() : relativePath;
-      if (!comparablePath.includes(comparableQuery)) return;
-      if (seenPaths.has(comparablePath)) return;
-
-      const source = classifySource(absolutePath, targets);
-      if (source === null) return;
-      seenPaths.add(comparablePath);
-      results.push({
-        source,
-        path: relativePath,
-        matchKind: "path",
-        lineStart: null,
-        lineEnd: null,
-        text: relativePath,
-        score: null,
-        indexedAt: null,
-        commit,
-      });
-      if (results.length > maxResults) {
-        stoppedForLimit = true;
-        child.kill();
+    const emit = (record: string): void => {
+      if (settled || !record) return;
+      received += 1;
+      try {
+        onRecord(record);
+      } catch (error) {
+        fail(error instanceof Error ? error : new Error(String(error)));
       }
     };
 
     const timer = setTimeout(() => {
       timedOut = true;
       child.kill();
-    }, timeoutMs);
+    }, Math.max(1, options.deadline - Date.now()));
 
     child.stdout.setEncoding("utf8");
     child.stdout.on("data", (chunk: string) => {
-      if (stoppedForLimit) return;
-      stdoutBuffer += chunk;
-      if (stdoutBuffer.length > 64 * 1024 && !stdoutBuffer.includes("\0")) {
-        finishWithError(new Error("ripgrep returned an excessively long path"));
+      if (settled) return;
+      buffer += chunk;
+      if (buffer.length > options.maxRecordLength && !buffer.includes(options.separator)) {
+        fail(new Error("ripgrep returned an excessively long record"));
         return;
       }
-      const paths = stdoutBuffer.split("\0");
-      stdoutBuffer = paths.pop() ?? "";
-      for (const reportedPath of paths) {
-        processPath(reportedPath);
-        if (stoppedForLimit) {
-          stdoutBuffer = "";
-          break;
-        }
-      }
+      const records = buffer.split(options.separator);
+      buffer = records.pop() ?? "";
+      for (const record of records) emit(record);
     });
     child.stderr.setEncoding("utf8");
     child.stderr.on("data", (chunk: string) => {
       if (stderr.length < 64 * 1024) stderr += chunk;
     });
-    child.once("error", (error) => finishWithError(error));
+    child.once("error", (error) => fail(error));
     child.once("close", (code) => {
       if (settled) return;
       clearTimeout(timer);
-      if (timedOut && !stoppedForLimit) {
-        finishWithError(new Error(`ripgrep timed out after ${timeoutMs}ms`));
+      if (timedOut) {
+        fail(new Error(`ripgrep timed out after ${options.timeoutMs}ms`));
         return;
       }
-      if (!stoppedForLimit && stdoutBuffer) processPath(stdoutBuffer);
+      emit(buffer);
       if (settled) return;
-      if (!stoppedForLimit && code !== 0 && code !== 1) {
-        finishWithError(
-          new Error(stderr.trim() || `ripgrep exited with code ${code}`),
-        );
+      // Exit code 2 also reports a single unreadable or vanished file; the
+      // records already received are still valid evidence.
+      if (code !== 0 && code !== 1 && !(code === 2 && received > 0)) {
+        fail(new Error(stderr.trim() || `ripgrep exited with code ${code}`));
         return;
       }
       settled = true;
-      resolve({
-        results: results.slice(0, maxResults),
-        truncated: stoppedForLimit || results.length > maxResults,
-      });
+      resolve();
     });
   });
 }
 
-function runRipgrep(
+function matchedFile(
   projectRoot: string,
-  args: string[],
+  reportedPath: string,
   targets: SourceTarget[],
+  accept: (key: string) => boolean,
+): MatchedFile | null {
+  const absolutePath = path.isAbsolute(reportedPath)
+    ? path.resolve(reportedPath)
+    : path.resolve(projectRoot, reportedPath);
+  const relativePath = toProjectPath(path.relative(projectRoot, absolutePath));
+  const key = comparisonKey(relativePath);
+  if (!accept(key)) return null;
+  const source = classifySource(absolutePath, targets);
+  if (source === null) return null;
+  return {
+    source,
+    relativePath,
+    key,
+    targetIndex: sourceTargetIndex(absolutePath, targets),
+    segments: relativePath.split("/").map((segment) => Buffer.from(segment, "utf8")),
+  };
+}
+
+async function searchPaths(
+  projectRoot: string,
+  query: string,
+  targets: SourceTarget[],
+  excludes: string[],
   commit: string | null,
   maxResults: number,
+  deadline: number,
   timeoutMs: number,
 ): Promise<{ results: EvidenceResult[]; truncated: boolean }> {
-  return new Promise((resolve, reject) => {
-    const child = spawn("rg", args, {
-      cwd: projectRoot,
-      shell: false,
-      windowsHide: true,
-    });
-    const results: EvidenceResult[] = [];
-    const seenMatches = new Set<string>();
-    let stdoutBuffer = "";
-    let stderr = "";
-    let settled = false;
-    let stoppedForLimit = false;
-    let timedOut = false;
+  const comparableQuery = comparisonKey(query.replaceAll("\\", "/"));
+  const files = new Map<string, MatchedFile>();
+  await streamRipgrep(
+    projectRoot,
+    ["--no-config", "--files", "--null", ...globArgs(excludes), "--", ...uniqueTargetPaths(targets)],
+    { separator: "\0", maxRecordLength: 64 * 1024, deadline, timeoutMs },
+    (reportedPath) => {
+      const file = matchedFile(
+        projectRoot,
+        reportedPath,
+        targets,
+        (key) => key.includes(comparableQuery) && !files.has(key),
+      );
+      if (file !== null) files.set(file.key, file);
+    },
+  );
+  const ordered = [...files.values()].sort(compareMatchedFiles);
+  return {
+    results: ordered.slice(0, maxResults).map((file) => ({
+      source: file.source,
+      path: file.relativePath,
+      matchKind: "path",
+      lineStart: null,
+      lineEnd: null,
+      text: file.relativePath,
+      score: null,
+      indexedAt: null,
+      commit,
+    })),
+    truncated: ordered.length > maxResults,
+  };
+}
 
-    const finishWithError = (error: Error): void => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      child.kill();
-      reject(error);
-    };
-
-    const processLine = (line: string): void => {
-      if (!line || settled || stoppedForLimit) return;
-      let event: unknown;
-      try {
-        event = JSON.parse(line);
-      } catch {
-        finishWithError(new Error("ripgrep returned malformed JSON output"));
-        return;
-      }
-      if (
-        typeof event !== "object" ||
-        event === null ||
-        (event as { type?: unknown }).type !== "match"
-      ) {
-        return;
-      }
-
-      const match = event as RgMatchEvent;
-      const reportedPath = decodeRgText(match.data.path);
-      const lineText = decodeRgText(match.data.lines);
-      if (!reportedPath || lineText === null) return;
-
-      const absolutePath = path.isAbsolute(reportedPath)
-        ? path.resolve(reportedPath)
-        : path.resolve(projectRoot, reportedPath);
-      const source = classifySource(absolutePath, targets);
-      if (source === null) return;
-      const relativePath = toProjectPath(path.relative(projectRoot, absolutePath));
-      const matchKey = `${
-        process.platform === "win32" ? relativePath.toLowerCase() : relativePath
-      }:${match.data.line_number}`;
-      if (seenMatches.has(matchKey)) return;
-      seenMatches.add(matchKey);
-
-      results.push({
-        source,
-        path: relativePath,
-        matchKind: "content",
-        lineStart: match.data.line_number,
-        lineEnd: match.data.line_number,
-        text: lineText.replace(/[\r\n]+$/, "").slice(0, 2_000),
-        score: null,
-        indexedAt: null,
-        commit,
-      });
-      if (results.length > maxResults) {
-        stoppedForLimit = true;
-        child.kill();
-      }
-    };
-
-    const timer = setTimeout(() => {
-      timedOut = true;
-      child.kill();
-    }, timeoutMs);
-
-    child.stdout.setEncoding("utf8");
-    child.stdout.on("data", (chunk: string) => {
-      if (stoppedForLimit) return;
-      stdoutBuffer += chunk;
-      if (stdoutBuffer.length > 2 * 1024 * 1024 && !stdoutBuffer.includes("\n")) {
-        finishWithError(new Error("ripgrep returned an excessively long JSON line"));
-        return;
-      }
-      const lines = stdoutBuffer.split("\n");
-      stdoutBuffer = lines.pop() ?? "";
-      for (const line of lines) {
-        processLine(line);
-        if (stoppedForLimit) {
-          stdoutBuffer = "";
-          break;
+async function searchContent(
+  projectRoot: string,
+  query: string,
+  targets: SourceTarget[],
+  excludes: string[],
+  commit: string | null,
+  maxResults: number,
+  deadline: number,
+  timeoutMs: number,
+): Promise<{ results: EvidenceResult[]; truncated: boolean }> {
+  // List every matching file first; each contributes at least one match, so the
+  // first maxResults + 1 matches in file order lie within that many files.
+  const files = new Map<string, MatchedFile>();
+  await streamRipgrep(
+    projectRoot,
+    [
+      "--no-config",
+      "--files-with-matches",
+      "--null",
+      "--fixed-strings",
+      ...globArgs(excludes),
+      "--",
+      query,
+      ...uniqueTargetPaths(targets),
+    ],
+    { separator: "\0", maxRecordLength: 64 * 1024, deadline, timeoutMs },
+    (reportedPath) => {
+      const file = matchedFile(projectRoot, reportedPath, targets, (key) => !files.has(key));
+      if (file !== null) files.set(file.key, file);
+    },
+  );
+  const ordered = [...files.values()].sort(compareMatchedFiles);
+  const limit = maxResults + 1;
+  const results: EvidenceResult[] = [];
+  let next = 0;
+  while (next < ordered.length && results.length < limit) {
+    const batch: MatchedFile[] = [];
+    const batchFiles = next === 0
+      ? Math.min(FIRST_BATCH_FILES, limit)
+      : limit - results.length;
+    let characters = 0;
+    while (
+      next < ordered.length &&
+      batch.length < batchFiles &&
+      (batch.length === 0 || characters + ordered[next]!.relativePath.length < MAX_BATCH_PATH_CHARACTERS)
+    ) {
+      characters += ordered[next]!.relativePath.length + 1;
+      batch.push(ordered[next]!);
+      next += 1;
+    }
+    const order = new Map(batch.map((file, index) => [file.key, { file, index }]));
+    const matches: Array<{ index: number; evidence: EvidenceResult }> = [];
+    const seen = new Set<string>();
+    await streamRipgrep(
+      projectRoot,
+      [
+        "--no-config",
+        "--json",
+        "--fixed-strings",
+        "--line-number",
+        "--color",
+        "never",
+        "--max-count",
+        String(limit),
+        "--",
+        query,
+        ...batch.map((file) => file.relativePath),
+      ],
+      { separator: "\n", maxRecordLength: 2 * 1024 * 1024, deadline, timeoutMs },
+      (line) => {
+        let event: unknown;
+        try {
+          event = JSON.parse(line);
+        } catch {
+          throw new Error("ripgrep returned malformed JSON output");
         }
-      }
-    });
-
-    child.stderr.setEncoding("utf8");
-    child.stderr.on("data", (chunk: string) => {
-      if (stderr.length < 64 * 1024) stderr += chunk;
-    });
-    child.once("error", (error) => finishWithError(error));
-    child.once("close", (code) => {
-      if (settled) return;
-      clearTimeout(timer);
-      if (timedOut && !stoppedForLimit) {
-        finishWithError(new Error(`ripgrep timed out after ${timeoutMs}ms`));
-        return;
-      }
-      if (!stoppedForLimit && stdoutBuffer) processLine(stdoutBuffer);
-      if (settled) return;
-      if (!stoppedForLimit && code !== 0 && code !== 1) {
-        finishWithError(
-          new Error(stderr.trim() || `ripgrep exited with code ${code}`),
+        if (
+          typeof event !== "object" ||
+          event === null ||
+          (event as { type?: unknown }).type !== "match"
+        ) {
+          return;
+        }
+        const match = event as RgMatchEvent;
+        const reportedPath = decodeRgText(match.data.path);
+        const lineText = decodeRgText(match.data.lines);
+        if (!reportedPath || lineText === null) return;
+        const relativePath = toProjectPath(
+          path.relative(projectRoot, path.resolve(projectRoot, reportedPath)),
         );
-        return;
-      }
-      settled = true;
-      resolve({
-        results: results.slice(0, maxResults),
-        truncated: stoppedForLimit || results.length > maxResults,
-      });
-    });
-  });
+        const entry = order.get(comparisonKey(relativePath));
+        const matchKey = `${comparisonKey(relativePath)}:${match.data.line_number}`;
+        if (entry === undefined || seen.has(matchKey)) return;
+        seen.add(matchKey);
+        matches.push({
+          index: entry.index,
+          evidence: {
+            source: entry.file.source,
+            path: entry.file.relativePath,
+            matchKind: "content",
+            lineStart: match.data.line_number,
+            lineEnd: match.data.line_number,
+            text: lineText.replace(/[\r\n]+$/, "").slice(0, 2_000),
+            score: null,
+            indexedAt: null,
+            commit,
+          },
+        });
+      },
+    );
+    matches.sort((left, right) =>
+      left.index - right.index ||
+      (left.evidence.lineStart ?? 0) - (right.evidence.lineStart ?? 0));
+    results.push(...matches.map((match) => match.evidence));
+  }
+  return {
+    results: results.slice(0, maxResults),
+    truncated: results.length > maxResults,
+  };
 }
 
 export async function searchExact(input: {
@@ -399,22 +423,26 @@ export async function searchExact(input: {
   }
 
   const timeoutMs = input.timeoutMs ?? 15_000;
+  const deadline = Date.now() + timeoutMs;
   const search = looksLikePath(query)
-    ? await runRipgrepPaths(
+    ? await searchPaths(
         project.root,
-        buildRgFilesArgs(targets, loadedConfig.value.exclude),
         query,
         targets,
+        loadedConfig.value.exclude,
         project.commit,
         maxResults,
+        deadline,
         timeoutMs,
       )
-    : await runRipgrep(
+    : await searchContent(
         project.root,
-        buildRgArgs(query, targets, loadedConfig.value.exclude),
+        query,
         targets,
+        loadedConfig.value.exclude,
         project.commit,
         maxResults,
+        deadline,
         timeoutMs,
       );
   return {

@@ -14,10 +14,12 @@ using Microsoft.Win32.SafeHandles;
 
 internal static class Program
 {
-    private const string WorkerVersion = "project-context-roslyn/0.3.0";
+    private const string WorkerVersion = "project-context-roslyn/0.4.0";
     private const int MaxFiles = 100_000;
     private const int MaxFileBytes = 2 * 1024 * 1024;
     private const int MaxMessages = 20;
+    private const int MaxMissingNames = 20;
+    private const int MaxMissingNameLookups = 200;
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -26,7 +28,12 @@ internal static class Program
     };
 
     private static readonly HashSet<string> Directions =
-        new(StringComparer.Ordinal) { "callers", "callees", "inherits", "implements" };
+        new(StringComparer.Ordinal) { "callers", "callees", "inherits", "implements", "derived", "implementedBy" };
+
+    // Names the compiler could not bind: CS0103 (name does not exist),
+    // CS0246 (type or namespace not found), CS0234 (not in the namespace).
+    private static readonly HashSet<string> MissingNameDiagnostics =
+        new(StringComparer.Ordinal) { "CS0103", "CS0246", "CS0234" };
 
     private static readonly HashSet<string> UnityMessages = new(StringComparer.Ordinal)
     {
@@ -612,6 +619,7 @@ internal static class Program
         private readonly IReadOnlyDictionary<SyntaxTree, SourceUnit> _sources;
         private readonly TraceDiagnostics _diagnostics;
         private readonly Dictionary<SyntaxTree, SemanticModel> _models = new();
+        private int _missingNameLookups;
 
         public TraceAnalyzer(
             CSharpCompilation compilation,
@@ -638,7 +646,9 @@ internal static class Program
             {
                 var types = FindTypes(symbol);
                 matched = types.Select(ToNode).ToList();
-                edges = FindTypeRelations(types, direction);
+                edges = direction is "derived" or "implementedBy"
+                    ? FindSubtypes(types, direction)
+                    : FindTypeRelations(types, direction);
             }
 
             var ordered = edges
@@ -878,7 +888,7 @@ internal static class Program
                     var info = model.GetSymbolInfo(invocation);
                     if (info.Symbol is not IMethodSymbol called)
                     {
-                        _diagnostics.UnresolvedCandidates++;
+                        RecordUnresolved(model, invocation);
                         continue;
                     }
                     var normalized = NormalizeMethod(called);
@@ -925,7 +935,7 @@ internal static class Program
                         var info = model.GetSymbolInfo(invocation);
                         if (info.Symbol is not IMethodSymbol called)
                         {
-                            _diagnostics.UnresolvedCandidates++;
+                            RecordUnresolved(model, invocation);
                             continue;
                         }
                         var normalized = NormalizeMethod(called);
@@ -939,7 +949,7 @@ internal static class Program
                         var info = model.GetSymbolInfo(creation);
                         if (info.Symbol is not IMethodSymbol constructor)
                         {
-                            _diagnostics.UnresolvedCandidates++;
+                            RecordUnresolved(model, creation);
                             continue;
                         }
                         var normalized = NormalizeMethod(constructor);
@@ -990,6 +1000,100 @@ internal static class Program
                 }
             }
             return edges;
+        }
+
+        private List<TraceEdge> FindSubtypes(
+            IReadOnlyCollection<INamedTypeSymbol> targets,
+            string direction)
+        {
+            // derived and implementedBy invert inherits and implements, which
+            // split a base list by whether the named type is an interface.
+            var implementedBy = direction == "implementedBy";
+            var relevant = targets
+                .Where(target => (target.TypeKind == TypeKind.Interface) == implementedBy)
+                .ToList();
+            var targetNames = relevant.Select(target => target.Name).ToHashSet(StringComparer.Ordinal);
+            var edges = new List<TraceEdge>();
+            foreach (var source in _sources.Values)
+            {
+                if (relevant.Count == 0)
+                {
+                    break;
+                }
+                SemanticModel? model = null;
+                foreach (var declaration in source.Tree.GetRoot().DescendantNodes().OfType<TypeDeclarationSyntax>())
+                {
+                    if (declaration.BaseList is null)
+                    {
+                        continue;
+                    }
+                    foreach (var baseType in declaration.BaseList.Types)
+                    {
+                        if (!targetNames.Contains(BaseTypeName(baseType.Type) ?? ""))
+                        {
+                            continue;
+                        }
+                        model ??= GetModel(source.Tree);
+                        if (model.GetTypeInfo(baseType.Type).Type is not INamedTypeSymbol related
+                            || related.TypeKind == TypeKind.Error)
+                        {
+                            RecordUnresolved(model, baseType);
+                            continue;
+                        }
+                        var normalized = related.OriginalDefinition;
+                        var target = relevant.FirstOrDefault(candidate =>
+                            SymbolEqualityComparer.Default.Equals(candidate, normalized));
+                        if (target is null || model.GetDeclaredSymbol(declaration) is not INamedTypeSymbol subtype)
+                        {
+                            continue;
+                        }
+                        edges.Add(new TraceEdge(
+                            implementedBy ? "implements" : "inherits",
+                            ToNode(subtype.OriginalDefinition),
+                            ToNode(target),
+                            Evidence(baseType)));
+                    }
+                }
+            }
+            return edges;
+        }
+
+        private static string? BaseTypeName(TypeSyntax type) => type switch
+        {
+            IdentifierNameSyntax identifier => identifier.Identifier.ValueText,
+            GenericNameSyntax generic => generic.Identifier.ValueText,
+            QualifiedNameSyntax qualified => BaseTypeName(qualified.Right),
+            AliasQualifiedNameSyntax alias => BaseTypeName(alias.Name),
+            _ => null,
+        };
+
+        private void RecordUnresolved(SemanticModel model, SyntaxNode node)
+        {
+            _diagnostics.UnresolvedCandidates++;
+            if (_missingNameLookups >= MaxMissingNameLookups
+                || _diagnostics.MissingNames.Count >= MaxMissingNames)
+            {
+                return;
+            }
+            _missingNameLookups++;
+            var text = node.SyntaxTree.GetText();
+            foreach (var diagnostic in model.GetDiagnostics(node.Span))
+            {
+                if (!MissingNameDiagnostics.Contains(diagnostic.Id) || !diagnostic.Location.IsInSource)
+                {
+                    continue;
+                }
+                var name = text.ToString(diagnostic.Location.SourceSpan).Trim();
+                if (name.Length is 0 or > 256 || _diagnostics.MissingNames.Contains(name, StringComparer.Ordinal))
+                {
+                    continue;
+                }
+                _diagnostics.MissingNames.Add(name);
+                if (_diagnostics.MissingNames.Count >= MaxMissingNames)
+                {
+                    return;
+                }
+            }
         }
 
         private SemanticModel GetModel(SyntaxTree tree)
@@ -1229,6 +1333,7 @@ internal static class Program
         public bool Partial { get; set; }
         public long ElapsedMs { get; set; }
         public List<string> Messages { get; } = [];
+        public List<string> MissingNames { get; } = [];
     }
 
     private sealed record ProjectSettings(CSharpParseOptions ParseOptions, IReadOnlyList<MetadataReference> References);

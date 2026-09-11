@@ -43,10 +43,12 @@ export interface ProjectContextVectorStore {
   dropCollection(collectionName: string): Promise<void>;
   upsert(collectionName: string, entities: VectorEntity[]): Promise<void>;
   deleteIds(collectionName: string, ids: string[]): Promise<void>;
+  /** A source restricts the nearest-neighbour window instead of filtering it afterwards. */
   search(
     collectionName: string,
     vector: number[],
     limit: number,
+    source?: SourceKind,
   ): Promise<VectorSearchHit[]>;
 }
 

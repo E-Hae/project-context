@@ -251,6 +251,7 @@ export async function searchSemantic(
       identity.collectionName,
       vector,
       fetchLimit,
+      scope === "all" ? undefined : scope === "code" ? "code" : "document",
     );
     if (searchQuery === queryExpansion.identifierQuery) {
       const identifierHits = searchHits.filter((hit) =>

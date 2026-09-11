@@ -8,6 +8,7 @@ import { z } from "zod/v4";
 
 import { readProjectDocument } from "./document-store.js";
 import { traceProject } from "./graph-client.js";
+import { TRACE_DIRECTIONS } from "./trace-adapter.js";
 import { analyzeProjectImpact } from "./impact-client.js";
 import {
   getHandoff,
@@ -203,7 +204,9 @@ export function createProjectContextServer(
           .min(1)
           .max(512)
           .describe("Symbol such as Namespace.Type.Member"),
-        direction: z.enum(["callers", "callees", "inherits", "implements"]),
+        direction: z
+          .enum(TRACE_DIRECTIONS)
+          .describe("inherits and implements return a type's base types; derived and implementedBy return the types that inherit or implement it"),
         maxResults: z.number().int().min(1).max(200).default(50),
         language: z.string().min(1).max(128).optional().describe("Trace adapter language when more than one adapter matches"),
       },

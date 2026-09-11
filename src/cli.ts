@@ -18,6 +18,7 @@ import {
   updateGlobalNpmInstall,
 } from "./npm-updater.js";
 import { collectProjectStatus } from "./status.js";
+import { TRACE_DIRECTIONS } from "./trace-adapter.js";
 import { watchProject } from "./watcher.js";
 
 function printUsage(stream: NodeJS.WriteStream = process.stderr): void {
@@ -29,7 +30,7 @@ function printUsage(stream: NodeJS.WriteStream = process.stderr): void {
       "  pctx watch <project-root> [interval-ms]",
       "  pctx status [project-root]",
       "  pctx search <project-root> <query> [auto|exact|graph|semantic] [all|code|documents] [max-results] [language]",
-      "  pctx trace <project-root> <symbol> <callers|callees|inherits|implements> [max-results] [language]",
+      "  pctx trace <project-root> <symbol> <callers|callees|inherits|implements|derived|implementedBy> [max-results] [language]",
       "  pctx impact <project-root> <path> [max-results] [language]",
       "  pctx read <project-root> <path> [start-line] [end-line]",
       "  pctx handoff save <project-root> <label> (--file <markdown-file> | --stdin)",
@@ -304,13 +305,8 @@ async function main(args: string[]): Promise<number> {
 
   if (command === "trace" && rest.length >= 3 && rest.length <= 5) {
     const [projectPath, symbol, directionValue, maxResultsValue, language] = rest;
-    if (
-      directionValue !== "callers" &&
-      directionValue !== "callees" &&
-      directionValue !== "inherits" &&
-      directionValue !== "implements"
-    ) {
-      throw new Error("direction must be callers, callees, inherits, or implements");
+    if (!(TRACE_DIRECTIONS as readonly string[]).includes(directionValue!)) {
+      throw new Error(`direction must be one of ${TRACE_DIRECTIONS.join(", ")}`);
     }
     const maxResults = maxResultsValue === undefined ? 50 : Number(maxResultsValue);
     const result = await traceProject({

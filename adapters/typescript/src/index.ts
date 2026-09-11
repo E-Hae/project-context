@@ -111,6 +111,12 @@ function isHeritageDeclaration(
   return ts.isClassDeclaration(node) || ts.isInterfaceDeclaration(node);
 }
 
+function heritageName(expression: ts.Expression): string | undefined {
+  if (ts.isIdentifier(expression)) return expression.text;
+  if (ts.isPropertyAccessExpression(expression)) return expression.name.text;
+  return undefined;
+}
+
 function canonicalSymbol(checker: ts.TypeChecker, symbol: ts.Symbol): ts.Symbol {
   return (symbol.flags & ts.SymbolFlags.Alias) !== 0
     ? checker.getAliasedSymbol(symbol)
@@ -334,7 +340,9 @@ class TypeScriptAnalyzer {
       ? this.findCallers(targets)
       : request.direction === "callees"
         ? this.findCallees(targets)
-        : this.findTypeRelations(targets, request.direction);
+        : request.direction === "derived" || request.direction === "implementedBy"
+          ? this.findSubtypes(targets, request.direction)
+          : this.findTypeRelations(targets, request.direction);
     const ordered = results
       .filter((edge, index, all) => all.findIndex((candidate) =>
         candidate.relation === edge.relation &&
@@ -624,6 +632,39 @@ class TypeScriptAnalyzer {
     return results;
   }
 
+  private findSubtypes(
+    targets: DeclarationInfo[],
+    direction: "derived" | "implementedBy",
+  ): AnalyzerResult["results"] {
+    const targetSymbols = new Set(targets.map((target) => target.symbol));
+    const targetNames = new Set(targets.map((target) => target.symbol.getName()));
+    const results: AnalyzerResult["results"] = [];
+    for (const info of this.typeInfos) {
+      if (!isHeritageDeclaration(info.declaration) || info.declaration.heritageClauses === undefined) continue;
+      for (const heritage of info.declaration.heritageClauses) {
+        const isImplements = heritage.token === ts.SyntaxKind.ImplementsKeyword;
+        if ((direction === "implementedBy") !== isImplements) continue;
+        for (const type of heritage.types) {
+          const related = this.relatedTypeSymbol(type);
+          if (related === undefined) {
+            // Only an unresolved base that is spelled like a target could
+            // have been one; an unrelated broken import is not a candidate.
+            if (targetNames.has(heritageName(type.expression) ?? "")) this.unresolvedCandidates += 1;
+            continue;
+          }
+          if (!targetSymbols.has(related)) continue;
+          results.push({
+            relation: isImplements ? "implements" : "inherits",
+            from: this.toTraceSymbol(info.symbol, info),
+            to: this.toTraceSymbol(related),
+            evidence: this.evidence(type),
+          });
+        }
+      }
+    }
+    return results;
+  }
+
   private relatedTypeSymbol(type: ts.ExpressionWithTypeArguments): ts.Symbol | undefined {
     const related = this.checker.getTypeAtLocation(type.expression);
     const symbol = related.aliasSymbol ?? related.symbol ?? this.checker.getSymbolAtLocation(type.expression);
@@ -811,6 +852,7 @@ export function createTypeScriptTraceAdapter(): TraceAdapter {
     languageAliases: ["javascript", "js"],
     sourceFileExtensions: [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"],
     auxiliaryFileExtensions: [".json"],
+    supportedDirections: ["callers", "callees", "inherits", "implements", "derived", "implementedBy"],
     async probe() {
       return {
         available: true,

@@ -72,6 +72,9 @@ test("TypeScript adapter exposes JavaScript support and probes without an extern
   assert.equal(traceAdapter.language, "typescript");
   assert.deepEqual(traceAdapter.languageAliases, ["javascript", "js"]);
   assert.deepEqual(traceAdapter.sourceFileExtensions, [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"]);
+  assert.deepEqual(traceAdapter.supportedDirections, [
+    "callers", "callees", "inherits", "implements", "derived", "implementedBy",
+  ]);
   assert.equal(probe.metadata?.javascriptSupport, true);
 });
 
@@ -106,6 +109,19 @@ test("TypeScript adapter traces calls and type relationships with source evidenc
     assert.equal(implementsResult.results[0]?.relation, "implements");
     assert.equal(implementsResult.results[0]?.to.name, "Runnable");
     assert.equal(implementsResult.diagnostics.metadata?.allowJs, true);
+
+    const derived = await traceAdapter.trace({ ...baseRequest, symbol: "Base", direction: "derived" });
+    assert.deepEqual(
+      derived.results.map((result) => [result.relation, result.from.name, result.to.name, result.evidence.path]),
+      [["inherits", "Derived", "Base", "derived.ts"]],
+    );
+    const implementedBy = await traceAdapter.trace({ ...baseRequest, symbol: "Runnable", direction: "implementedBy" });
+    assert.deepEqual(
+      implementedBy.results.map((result) => [result.relation, result.from.name, result.to.name]),
+      [["implements", "Derived", "Runnable"]],
+    );
+    const notImplemented = await traceAdapter.trace({ ...baseRequest, symbol: "Base", direction: "implementedBy" });
+    assert.deepEqual(notImplemented.results, []);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

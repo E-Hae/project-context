@@ -130,6 +130,14 @@ export function isExcluded(
   });
 }
 
+/** Index of the first configured target that contains a path, or -1. */
+export function sourceTargetIndex(
+  absolutePath: string,
+  targets: SourceTarget[],
+): number {
+  return targets.findIndex((target) => isInside(target, absolutePath));
+}
+
 export function classifySource(
   absolutePath: string,
   targets: SourceTarget[],

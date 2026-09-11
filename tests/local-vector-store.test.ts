@@ -54,6 +54,16 @@ test("LocalVectorStore persists deterministic cosine results and collection chan
       ),
       [a, b, c],
     );
+    await reopened.upsert(collection, [{ ...entity("d".repeat(64), [0, 1]), source: "document" }]);
+    assert.deepEqual(
+      (await reopened.search(collection, [1, 0], 1, "document")).map((hit) => hit.source),
+      ["document"],
+    );
+    assert.equal(
+      (await reopened.search(collection, [0, 1], 4, "code")).every((hit) => hit.source === "code"),
+      true,
+    );
+    await reopened.deleteIds(collection, ["d".repeat(64)]);
     await reopened.deleteIds(collection, [a]);
     assert.deepEqual(
       (await new LocalVectorStore(stateRoot).search(collection, [1, 0], 3)).map(

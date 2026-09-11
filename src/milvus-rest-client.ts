@@ -1,4 +1,5 @@
 import type { ProjectContextConfig } from "./config.js";
+import type { SourceKind } from "./source-policy.js";
 import type {
   CollectionLoadState,
   ProjectContextVectorStore,
@@ -170,6 +171,7 @@ export class MilvusRestClient implements ProjectContextVectorStore {
     collectionName: string,
     vector: number[],
     limit: number,
+    source?: SourceKind,
   ): Promise<VectorSearchHit[]> {
     if (!Number.isInteger(limit) || limit < 1 || limit > 200) {
       throw new Error("Milvus search limit must be between 1 and 200");
@@ -179,6 +181,7 @@ export class MilvusRestClient implements ProjectContextVectorStore {
       data: [vector],
       annsField: "embedding",
       limit,
+      ...(source === undefined ? {} : { filter: `source == ${JSON.stringify(source)}` }),
       consistencyLevel: "Strong",
       searchParams: { metricType: "COSINE", params: {} },
       outputFields: [

@@ -72,7 +72,7 @@ function semanticResult(): SemanticSearchResult {
 function graphRagResult(): GraphRagSearchResult {
   return {
     ...semanticResult(),
-    route: "semantic",
+    route: "graphrag",
     graph: {
       languages: ["fixture"],
       seedNodes: 1,
@@ -193,7 +193,115 @@ test("auto routing separates exact, graph, and semantic questions", () => {
   assert.equal(extractGraphDirection("who depends on Feature.Target?"), "callers");
   assert.equal(extractGraphDirection("무엇이 Feature.Target을 참조해?"), "callers");
   assert.equal(extractGraphDirection("Feature.Target references what?"), "callees");
-  assert.equal(extractGraphDirection("IFeature 구현 타입"), "implements");
+  assert.equal(extractGraphDirection("IFeature 구현 타입"), "implementedBy");
+});
+
+test("graph direction reads Korean particles against the traced symbol", () => {
+  const cases: Array<[string, string, string]> = [
+    ["PlayerController.HasFlag 를 호출하는 곳", "PlayerController.HasFlag", "callers"],
+    ["PlayerController.HasFlag 어디서 호출돼?", "PlayerController.HasFlag", "callers"],
+    ["PlayerController.HasFlag 호출하는 메서드", "PlayerController.HasFlag", "callers"],
+    ["누가 PlayerController.HasFlag 호출해?", "PlayerController.HasFlag", "callers"],
+    ["PlayerController.HasFlag 를 부르는 곳", "PlayerController.HasFlag", "callers"],
+    ["PlayerController.HasFlag 사용처", "PlayerController.HasFlag", "callers"],
+    ["PlayerController.HasFlag 호출자", "PlayerController.HasFlag", "callers"],
+    ["누가 호출 PlayerController.HasFlag", "PlayerController.HasFlag", "callers"],
+    ["PlayerController.HasFlag 를 어디서 참조해?", "PlayerController.HasFlag", "callers"],
+    ["PlayerController.HasFlag 가 호출하는 메서드", "PlayerController.HasFlag", "callees"],
+    ["PlayerController.HasFlag에서 호출되는 메서드", "PlayerController.HasFlag", "callees"],
+    ["Feature.Target 는 누가 호출해?", "Feature.Target", "callers"],
+    ["Feature.Target 는 무엇을 호출해?", "Feature.Target", "callees"],
+    ["Feature.Target 가 어느 메서드를 호출해?", "Feature.Target", "callees"],
+    ["어느 파일에서 Feature.Target 를 참조해?", "Feature.Target", "callers"],
+    ["Feature.Target 를 호출하는 하위 클래스", "Feature.Target", "callers"],
+    ["어디서 Assets/UI/Slot.cs.meta 를 참조해?", "Assets/UI/Slot.cs.meta", "callers"],
+    [
+      "어디서 Assets/Scripts/UI/Inventory/InventorySlotItemView.cs.meta 를 참조해?",
+      "Assets/Scripts/UI/Inventory/InventorySlotItemView.cs.meta",
+      "callers",
+    ],
+    ["BaseState 를 상속하는 클래스", "BaseState", "derived"],
+    ["BaseState 하위 클래스", "BaseState", "derived"],
+    ["BaseState가 상속하는 클래스", "BaseState", "inherits"],
+    ["IFeature를 구현하는 클래스", "IFeature", "implementedBy"],
+    ["Player가 구현하는 인터페이스", "Player", "implements"],
+    ["PlayerController가 어떤 클래스에 의존해?", "PlayerController", "callees"],
+    ["PlayerController는 어디에 의존해?", "PlayerController", "callees"],
+    ["Who calls Feature.Target?", "Feature.Target", "callers"],
+    ["Which classes implement IFeature?", "IFeature", "implementedBy"],
+    ["Which classes implement IFeature in Game.Core?", "IFeature", "implementedBy"],
+    ["derived types of BaseState", "BaseState", "derived"],
+    ["classes derived from BaseState", "BaseState", "derived"],
+    ["What is BaseState derived from?", "BaseState", "inherits"],
+    ["base types of Player", "Player", "inherits"],
+  ];
+  for (const [query, symbol, direction] of cases) {
+    assert.deepEqual(
+      decideSearchRoute(query, "all"),
+      { route: "graph", symbol, direction },
+      query,
+    );
+  }
+  // Ordinary questions keep going to GraphRAG instead of an adapter trace.
+  for (const query of [
+    "What is the base class for UI panels?",
+    "DOTween을 사용하는 방법",
+    "How are HTTP calls retried?",
+    "How do I extend InventoryView?",
+  ]) {
+    assert.equal(decideSearchRoute(query, "all").route, "semantic", query);
+  }
+});
+
+test("an empty graph answer names the directions to try instead", async () => {
+  const search = (query: string) => searchProject(
+    { projectPath: ".", query, mode: "graph" },
+    {
+      dependencies: {
+        searchExact: async () => exactResult(false),
+        searchSemantic: async () => semanticResult(),
+        traceProject: async (input: TraceProjectInput) => ({
+          ...graphResult(false),
+          symbol: input.symbol,
+          direction: input.direction,
+        }),
+      },
+    },
+  );
+  const calls = (await search("Feature.Target 가 호출하는 메서드")) as GraphTraceResult;
+  assert.equal(calls.route, "graph");
+  assert.match(calls.diagnostics.messages[0] ?? "", /No callees relationships were found for Feature\.Target/u);
+  assert.match(calls.diagnostics.messages[0] ?? "", /direction "callers"\.$/u);
+
+  const types = (await search("IRunnable 를 상속하는 인터페이스")) as GraphTraceResult;
+  assert.match(types.diagnostics.messages[0] ?? "", /direction "inherits" or "implementedBy"\.$/u);
+});
+
+test("an adapter without a direction falls back in auto mode and fails in graph mode", async () => {
+  let semanticCalls = 0;
+  const dependencies = {
+    searchExact: async () => exactResult(false),
+    searchSemantic: async () => {
+      semanticCalls += 1;
+      return semanticResult();
+    },
+    traceProject: async () => {
+      throw new GraphTraceError("no derived support", "unsupported_direction");
+    },
+  };
+  const fallback = await searchProject(
+    { projectPath: ".", query: "BaseState 를 상속하는 클래스", mode: "auto" },
+    { dependencies },
+  );
+  assert.equal(fallback.fallbackUsed, true);
+  assert.equal(semanticCalls, 1);
+  await assert.rejects(
+    searchProject(
+      { projectPath: ".", query: "BaseState 를 상속하는 클래스", mode: "graph" },
+      { dependencies },
+    ),
+    (error: unknown) => error instanceof GraphTraceError && error.code === "unsupported_direction",
+  );
 });
 
 test("explicit search modes are honored without fallback", async () => {
@@ -255,7 +363,7 @@ test("auto semantic routing uses GraphRAG when a fresh graph snapshot is availab
       },
     },
   );
-  assert.equal(result.route, "semantic");
+  assert.equal(result.route, "graphrag");
   assert.equal((result as GraphRagSearchResult).graph?.expandedNodes, 1);
   assert.equal(semanticCalls, 0);
 });

@@ -8,7 +8,7 @@ export interface RoslynTraceWorkerRequest {
   files: string[];
   assemblyDefinitions: string[];
   symbol: string;
-  direction: "callers" | "callees" | "inherits" | "implements";
+  direction: "callers" | "callees" | "inherits" | "implements" | "derived" | "implementedBy";
   maxResults: number;
 }
 

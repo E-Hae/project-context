@@ -1,8 +1,31 @@
+/**
+ * `inherits` and `implements` return the base types a type names; `derived`
+ * and `implementedBy` are their inverses and return the types that name it.
+ */
 export type TraceDirection =
   | "callers"
   | "callees"
   | "inherits"
-  | "implements";
+  | "implements"
+  | "derived"
+  | "implementedBy";
+
+export const TRACE_DIRECTIONS = [
+  "callers",
+  "callees",
+  "inherits",
+  "implements",
+  "derived",
+  "implementedBy",
+] as const satisfies readonly TraceDirection[];
+
+/** Directions assumed for an adapter that does not declare `supportedDirections`. */
+export const DEFAULT_TRACE_DIRECTIONS = [
+  "callers",
+  "callees",
+  "inherits",
+  "implements",
+] as const satisfies readonly TraceDirection[];
 
 export type TraceAdapterMetadataValue = string | number | boolean | null;
 export type TraceAdapterMetadata = Record<string, TraceAdapterMetadataValue>;
@@ -118,6 +141,8 @@ export interface TraceAdapter {
   languageAliases?: readonly string[];
   sourceFileExtensions: readonly string[];
   auxiliaryFileExtensions?: readonly string[];
+  /** Omitted by adapters that predate `derived` and `implementedBy`. */
+  supportedDirections?: readonly TraceDirection[];
   probe(): Promise<TraceAdapterProbeResult>;
   trace(request: TraceAdapterRequest): Promise<TraceAdapterResponse>;
   /** Optional so existing third-party trace-only adapters remain compatible. */
