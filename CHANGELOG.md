@@ -2,6 +2,12 @@
 
 All notable changes to Project Context MCP are documented in this file.
 
+## 2.7.1 - 2026-09-14
+
+### Fixed
+
+- Graph search reads a camelCase symbol whole instead of cutting it at its first capital. `extractGraphDirection 를 호출하는 곳` traced `GraphDirection` and failed with `symbol_not_found`; it now traces `extractGraphDirection`. Names that start lowercase, which is most TypeScript and JavaScript function names, were affected in the `graph` and `auto` search modes. Dotted names, call syntax, and capitalized names were not.
+
 ## 2.7.0 - 2026-09-11
 
 Released together with `project-context-mcp-csharp`, `project-context-mcp-typescript`, and `project-context-mcp-unity` 1.2.0, which require this core version.

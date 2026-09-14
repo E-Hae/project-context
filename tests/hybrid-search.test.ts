@@ -177,6 +177,16 @@ test("auto routing separates exact, graph, and semantic questions", () => {
   assert.equal(extractGraphSymbol("Caller.Submit() 호출자"), "Caller.Submit()");
   assert.equal(extractGraphSymbol("CALLER of Target"), "Target");
   assert.equal(
+    extractGraphSymbol("extractGraphDirection 를 호출하는 곳"),
+    "extractGraphDirection",
+  );
+  // An acronym word must not be read as a symbol ahead of the one that follows.
+  assert.equal(
+    extractGraphSymbol("iOS 빌드에서 Loader.CreateLoadingState 를 호출하는 곳"),
+    "Loader.CreateLoadingState",
+  );
+  assert.equal(extractGraphSymbol("iOS 빌드에서 참조하는 라이브러리"), null);
+  assert.equal(
     extractGraphSymbol("Assets/UI/Popup.prefab이 연결하는 스크립트"),
     "Assets/UI/Popup.prefab",
   );
@@ -234,6 +244,8 @@ test("graph direction reads Korean particles against the traced symbol", () => {
     ["classes derived from BaseState", "BaseState", "derived"],
     ["What is BaseState derived from?", "BaseState", "inherits"],
     ["base types of Player", "Player", "inherits"],
+    ["extractGraphDirection 를 호출하는 곳", "extractGraphDirection", "callers"],
+    ["extractGraphDirection를 호출하는 곳", "extractGraphDirection", "callers"],
   ];
   for (const [query, symbol, direction] of cases) {
     assert.deepEqual(

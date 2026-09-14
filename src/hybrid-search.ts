@@ -147,8 +147,12 @@ const PATH_PATTERN = /(?:^|[\\/])[\w .@()\-]+\.[A-Za-z0-9]+(?:$|\s)|\.(?:cs|asmd
 const ERROR_PATTERN = /\b(?:CS\d{4}|0x[0-9a-f]+|[A-Za-z_]\w*(?:Exception|Error))\b|오류|에러/iu;
 const WHOLE_IDENTIFIER_PATTERN =
   /^[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*(?:\([^()\r\n]{0,256}\))?$/u;
+// The bare-name branches start at a word boundary: without it "extractGraphDirection"
+// matched from its first capital and traced "GraphDirection". The camelCase branch
+// needs two characters after the inner capital, so an acronym word such as "iOS"
+// cannot shadow the real symbol later in the query while "parseXML" still matches.
 const SYMBOL_CANDIDATE_PATTERN =
-  /[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)+(?:\([^()\r\n]{0,256}\))?|[A-Za-z_]\w*\([^()\r\n]{0,256}\)|[A-Z][A-Za-z0-9_]{2,}/gu;
+  /[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)+(?:\([^()\r\n]{0,256}\))?|[A-Za-z_]\w*\([^()\r\n]{0,256}\)|\b[A-Z][A-Za-z0-9_]{2,}|\b[a-z_]\w*[A-Z]\w{2,}/gu;
 const QUOTED_PATH_CANDIDATE_PATTERN =
   /["'`]([^"'`\r\n]*[\\/][^"'`\r\n]*\.[A-Za-z0-9]+)["'`]/u;
 const PATH_CANDIDATE_PATTERN =
