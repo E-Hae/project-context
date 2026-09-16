@@ -2,6 +2,13 @@
 
 All notable changes to Project Context MCP are documented in this file.
 
+## 2.7.2 - 2026-09-16
+
+### Changed
+
+- MCP success responses now return the full payload only in `structuredContent`; `content` keeps a short compatibility message instead of duplicating the complete JSON result.
+- `context_search`, `context_trace`, and `context_impact` now default to 10 results over MCP while preserving explicit requests up to 200 results and the CLI default of 50.
+
 ## 2.7.1 - 2026-09-14
 
 ### Fixed
