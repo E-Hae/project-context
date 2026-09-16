@@ -13,6 +13,71 @@ import { GraphTraceError } from "../src/graph-client.js";
 import type { SemanticSearchResult } from "../src/result-format.js";
 import { writeProjectConfig } from "./project-config-fixture.js";
 
+function serializedCharacterCount(value: unknown): number {
+  return JSON.stringify(value).length;
+}
+
+function occurrenceCount(text: string, marker: string): number {
+  return text.split(marker).length - 1;
+}
+
+test("MCP response size measurement captures the duplicated payload baseline", async () => {
+  const marker = "representative-result-body-".repeat(200);
+  const result: SemanticSearchResult = {
+    route: "semantic",
+    fallbackUsed: false,
+    query: "fixture",
+    scope: "code",
+    commit: null,
+    indexCommit: null,
+    indexedAt: "2026-09-16T00:00:00.000Z",
+    stale: false,
+    queryExpansion: {
+      used: false,
+      model: null,
+      expandedQuery: null,
+      identifierQuery: null,
+      error: null,
+    },
+    staleResultsSkipped: 0,
+    results: [
+      {
+        source: "code",
+        path: "src/fixture.ts",
+        lineStart: 1,
+        lineEnd: 1,
+        text: marker,
+        matchKind: "semantic",
+        score: 1,
+        indexedAt: "2026-09-16T00:00:00.000Z",
+        commit: null,
+      },
+    ],
+    truncated: false,
+  };
+  const server = createProjectContextServer({ search: async () => result });
+  const client = new Client({ name: "response-size-test", version: "0.1.0" });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  await server.connect(serverTransport);
+  await client.connect(clientTransport);
+  try {
+    const response = await client.callTool({
+      name: "context_search",
+      arguments: { projectPath: ".", query: "fixture" },
+    });
+    const serialized = JSON.stringify(response);
+    const payloadCharacters = serializedCharacterCount(result);
+    const responseCharacters = serializedCharacterCount(response);
+
+    assert.equal(occurrenceCount(serialized, marker), 2);
+    assert.ok(responseCharacters > payloadCharacters * 2);
+    assert.ok(responseCharacters < payloadCharacters * 2 + 1_000);
+  } finally {
+    await client.close();
+    await server.close();
+  }
+});
+
 test("context_search keeps the semantic route when GraphRAG metadata is present", async () => {
   let includeGraph = false;
   const semantic: SemanticSearchResult = {
