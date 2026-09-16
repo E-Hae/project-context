@@ -21,7 +21,7 @@ function occurrenceCount(text: string, marker: string): number {
   return text.split(marker).length - 1;
 }
 
-test("MCP response size measurement captures the duplicated payload baseline", async () => {
+test("MCP success responses serialize the full payload only once", async () => {
   const marker = "representative-result-body-".repeat(200);
   const result: SemanticSearchResult = {
     route: "semantic",
@@ -69,9 +69,15 @@ test("MCP response size measurement captures the duplicated payload baseline", a
     const payloadCharacters = serializedCharacterCount(result);
     const responseCharacters = serializedCharacterCount(response);
 
-    assert.equal(occurrenceCount(serialized, marker), 2);
-    assert.ok(responseCharacters > payloadCharacters * 2);
-    assert.ok(responseCharacters < payloadCharacters * 2 + 1_000);
+    assert.equal(occurrenceCount(serialized, marker), 1);
+    assert.ok(responseCharacters > payloadCharacters);
+    assert.ok(responseCharacters < payloadCharacters + 1_000);
+    assert.deepEqual(response.content, [
+      {
+        type: "text",
+        text: "Success. Full result is available in structuredContent.",
+      },
+    ]);
   } finally {
     await client.close();
     await server.close();
@@ -161,6 +167,18 @@ test("context_status is exposed through MCP and returns structured content", asy
   );
   const server = createProjectContextServer({
     handoffRoot,
+    impact: async ({ target, language }) => ({
+      route: "impact",
+      target,
+      language: language ?? "git",
+      commit: null,
+      analyzedAt: "2026-07-14T00:00:00.000Z",
+      workerVersion: "fixture-worker/1.0",
+      commitsAnalyzed: 1,
+      results: [],
+      truncated: false,
+      diagnostics: { elapsedMs: 1, messages: [] },
+    }),
     trace: async ({ projectPath, symbol, direction }) => ({
       route: "graph",
       fallbackUsed: false,
@@ -281,6 +299,16 @@ test("context_status is exposed through MCP and returns structured content", asy
     });
     assert.equal(derived.isError, undefined);
     assert.equal((derived.structuredContent as { direction?: unknown }).direction, "derived");
+
+    const impact = await client.callTool({
+      name: "context_impact",
+      arguments: {
+        projectPath: projectRoot,
+        target: "src/Example.cs",
+      },
+    });
+    assert.equal(impact.isError, undefined);
+    assert.equal((impact.structuredContent as { route?: unknown }).route, "impact");
 
     const handoffs = await client.callTool({
       name: "context_handoff_list",

@@ -41,6 +41,19 @@ function packageVersion(): string {
   return "0.0.0";
 }
 
+function successfulToolResult<T extends object>(result: T) {
+  const structuredContent = { ...result } as Record<string, unknown>;
+  return {
+    content: [
+      {
+        type: "text" as const,
+        text: "Success. Full result is available in structuredContent.",
+      },
+    ],
+    structuredContent,
+  };
+}
+
 export function createProjectContextServer(
   options: ProjectContextServerOptions = {},
 ): McpServer {
@@ -74,15 +87,7 @@ export function createProjectContextServer(
     async ({ projectPath }) => {
       try {
         const result = await collectProjectStatus(projectPath);
-        return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify(result, null, 2),
-            },
-          ],
-          structuredContent: { ...result },
-        };
+        return successfulToolResult(result);
       } catch (error) {
         return {
           content: [
@@ -128,10 +133,7 @@ export function createProjectContextServer(
           maxResults,
           ...(language === undefined ? {} : { language }),
         });
-        return {
-          content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
-          structuredContent: { ...result },
-        };
+        return successfulToolResult(result);
       } catch (error) {
         return {
           content: [
@@ -173,10 +175,7 @@ export function createProjectContextServer(
           startLine,
           ...(endLine === undefined ? {} : { endLine }),
         });
-        return {
-          content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
-          structuredContent: { ...result },
-        };
+        return successfulToolResult(result);
       } catch (error) {
         return {
           content: [
@@ -226,10 +225,7 @@ export function createProjectContextServer(
           maxResults,
           ...(language === undefined ? {} : { language }),
         });
-        return {
-          content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
-          structuredContent: { ...result },
-        };
+        return successfulToolResult(result);
       } catch (error) {
         return {
           content: [
@@ -265,7 +261,7 @@ export function createProjectContextServer(
           maxResults,
           ...(language === undefined ? {} : { language }),
         });
-        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }], structuredContent: { ...result } };
+        return successfulToolResult(result);
       } catch (error) {
         return { content: [{ type: "text", text: error instanceof Error ? error.message : String(error) }], isError: true };
       }
@@ -311,10 +307,7 @@ export function createProjectContextServer(
           },
           options,
         );
-        return {
-          content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
-          structuredContent: { ...result },
-        };
+        return successfulToolResult(result);
       } catch (error) {
         return {
           content: [
@@ -368,10 +361,7 @@ export function createProjectContextServer(
           },
           options,
         );
-        return {
-          content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
-          structuredContent: { ...result },
-        };
+        return successfulToolResult(result);
       } catch (error) {
         return {
           content: [
@@ -427,10 +417,7 @@ export function createProjectContextServer(
           },
           options,
         );
-        return {
-          content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
-          structuredContent: { ...result },
-        };
+        return successfulToolResult(result);
       } catch (error) {
         return {
           content: [
@@ -488,10 +475,7 @@ export function createProjectContextServer(
           },
           options,
         );
-        return {
-          content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
-          structuredContent: { ...result },
-        };
+        return successfulToolResult(result);
       } catch (error) {
         return {
           content: [
