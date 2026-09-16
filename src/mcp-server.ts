@@ -28,6 +28,7 @@ export interface ProjectContextServerOptions {
 
 const moduleDirectory = path.dirname(fileURLToPath(import.meta.url));
 const PACKAGE_ROOT = path.resolve(moduleDirectory, "..", "..");
+const MCP_DEFAULT_MAX_RESULTS = 10;
 
 function packageVersion(): string {
   try {
@@ -113,7 +114,7 @@ export function createProjectContextServer(
         query: z.string().min(1).max(2_048).describe("Text or question to search for"),
         mode: z.enum(["auto", "exact", "graph", "semantic"]).default("auto"),
         scope: z.enum(["all", "code", "documents"]).default("all"),
-        maxResults: z.number().int().min(1).max(200).default(50),
+        maxResults: z.number().int().min(1).max(200).default(MCP_DEFAULT_MAX_RESULTS),
         language: z.string().min(1).max(128).optional().describe("Trace adapter language for graph routing"),
       },
       annotations: {
@@ -206,7 +207,7 @@ export function createProjectContextServer(
         direction: z
           .enum(TRACE_DIRECTIONS)
           .describe("inherits and implements return a type's base types; derived and implementedBy return the types that inherit or implement it"),
-        maxResults: z.number().int().min(1).max(200).default(50),
+        maxResults: z.number().int().min(1).max(200).default(MCP_DEFAULT_MAX_RESULTS),
         language: z.string().min(1).max(128).optional().describe("Trace adapter language when more than one adapter matches"),
       },
       annotations: {
@@ -248,7 +249,7 @@ export function createProjectContextServer(
       inputSchema: {
         projectPath: z.string().min(1).describe("Absolute or relative project path"),
         target: z.string().min(1).max(4_096).describe("Project-relative file path"),
-        maxResults: z.number().int().min(1).max(200).default(50),
+        maxResults: z.number().int().min(1).max(200).default(MCP_DEFAULT_MAX_RESULTS),
         language: z.string().min(1).max(128).optional().describe("Impact adapter language; defaults to git"),
       },
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },

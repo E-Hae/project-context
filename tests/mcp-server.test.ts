@@ -22,6 +22,7 @@ function occurrenceCount(text: string, marker: string): number {
 }
 
 test("MCP success responses serialize the full payload only once", async () => {
+  const receivedMaxResults: number[] = [];
   const marker = "representative-result-body-".repeat(200);
   const result: SemanticSearchResult = {
     route: "semantic",
@@ -55,7 +56,12 @@ test("MCP success responses serialize the full payload only once", async () => {
     ],
     truncated: false,
   };
-  const server = createProjectContextServer({ search: async () => result });
+  const server = createProjectContextServer({
+    search: async ({ maxResults }) => {
+      receivedMaxResults.push(maxResults ?? -1);
+      return result;
+    },
+  });
   const client = new Client({ name: "response-size-test", version: "0.1.0" });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   await server.connect(serverTransport);
@@ -78,6 +84,20 @@ test("MCP success responses serialize the full payload only once", async () => {
         text: "Success. Full result is available in structuredContent.",
       },
     ]);
+
+    const explicit = await client.callTool({
+      name: "context_search",
+      arguments: { projectPath: ".", query: "fixture", maxResults: 50 },
+    });
+    assert.equal(explicit.isError, undefined);
+    assert.deepEqual(receivedMaxResults, [10, 50]);
+
+    const overLimit = await client.callTool({
+      name: "context_search",
+      arguments: { projectPath: ".", query: "fixture", maxResults: 201 },
+    });
+    assert.equal(overLimit.isError, true);
+    assert.deepEqual(receivedMaxResults, [10, 50]);
   } finally {
     await client.close();
     await server.close();
@@ -232,6 +252,13 @@ test("context_status is exposed through MCP and returns structured content", asy
         "context_handoff_update",
       ],
     );
+    for (const toolName of ["context_search", "context_trace", "context_impact"]) {
+      const tool = tools.tools.find((candidate) => candidate.name === toolName);
+      const maxResults = (tool?.inputSchema.properties as Record<string, unknown> | undefined)
+        ?.maxResults as { default?: unknown; maximum?: unknown } | undefined;
+      assert.equal(maxResults?.default, 10);
+      assert.equal(maxResults?.maximum, 200);
+    }
 
     const result = await client.callTool({
       name: "context_status",
