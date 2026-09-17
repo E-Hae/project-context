@@ -55,4 +55,6 @@ export interface DocumentReadResult extends Omit<
   lineStart: number;
   lineEnd: number;
   requestedEndLine: number;
+  hasMore: boolean;
+  nextStartLine: number | null;
 }

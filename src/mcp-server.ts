@@ -154,7 +154,7 @@ export function createProjectContextServer(
     {
       title: "Read project file range",
       description:
-        "Reads up to 400 lines from a configured, non-excluded text file without allowing project-root escape.",
+        "Reads 100 lines by default and up to 200 lines or 50,000 characters from a configured, non-excluded text file without allowing project-root escape. Use nextStartLine when hasMore is true.",
       inputSchema: {
         projectPath: z.string().min(1).describe("Absolute or relative project path"),
         path: z.string().min(1).max(2_048).describe("Project-relative file path"),

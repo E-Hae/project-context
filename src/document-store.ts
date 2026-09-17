@@ -11,9 +11,9 @@ import {
   resolveSourceTargets,
 } from "./source-policy.js";
 
-const MAX_READ_LINES = 400;
-const DEFAULT_READ_LINES = 200;
-const MAX_READ_CHARACTERS = 200_000;
+const MAX_READ_LINES = 200;
+const DEFAULT_READ_LINES = 100;
+const MAX_READ_CHARACTERS = 50_000;
 
 export async function readProjectDocument(input: {
   projectPath: string;
@@ -60,17 +60,26 @@ export async function readProjectDocument(input: {
   const selected: string[] = [];
   let currentLine = 0;
   let characterCount = 0;
+  let hasMore = false;
   try {
     for await (const line of lines) {
       currentLine += 1;
       if (currentLine < startLine) continue;
-      if (currentLine > requestedEndLine) break;
-      characterCount += line.length;
-      if (characterCount > MAX_READ_CHARACTERS) {
+      if (currentLine > requestedEndLine) {
+        hasMore = true;
+        break;
+      }
+      const nextCharacterCount = characterCount + line.length + (selected.length > 0 ? 1 : 0);
+      if (nextCharacterCount > MAX_READ_CHARACTERS && selected.length > 0) {
+        hasMore = true;
+        break;
+      }
+      if (nextCharacterCount > MAX_READ_CHARACTERS) {
         throw new Error(
-          `Selected range exceeds ${MAX_READ_CHARACTERS} characters`,
+          `Line ${currentLine} exceeds ${MAX_READ_CHARACTERS} characters`,
         );
       }
+      characterCount = nextCharacterCount;
       selected.push(line);
     }
   } finally {
@@ -89,6 +98,8 @@ export async function readProjectDocument(input: {
     lineStart: startLine,
     lineEnd,
     requestedEndLine,
+    hasMore,
+    nextStartLine: hasMore ? lineEnd + 1 : null,
     text: selected.join("\n"),
     score: null,
     indexedAt: null,
