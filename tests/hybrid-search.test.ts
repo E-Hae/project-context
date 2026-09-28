@@ -361,23 +361,32 @@ test("explicit search modes are honored without fallback", async () => {
 
 test("auto semantic routing uses GraphRAG when a fresh graph snapshot is available", async () => {
   let semanticCalls = 0;
+  const includeSummaryInputs: Array<boolean | undefined> = [];
+  const dependencies = {
+    searchExact: async () => exactResult(false),
+    searchSemantic: async () => {
+      semanticCalls += 1;
+      return semanticResult();
+    },
+    searchGraphRag: async (input: { includeSummary?: boolean }) => {
+      includeSummaryInputs.push(input.includeSummary);
+      return graphRagResult();
+    },
+    traceProject: async () => graphResult(false),
+  };
   const result = await searchProject(
     { projectPath: ".", query: "how does the feature workflow work", mode: "auto" },
-    {
-      dependencies: {
-        searchExact: async () => exactResult(false),
-        searchSemantic: async () => {
-          semanticCalls += 1;
-          return semanticResult();
-        },
-        searchGraphRag: async () => graphRagResult(),
-        traceProject: async () => graphResult(false),
-      },
-    },
+    { dependencies },
   );
   assert.equal(result.route, "graphrag");
   assert.equal((result as GraphRagSearchResult).graph?.expandedNodes, 1);
   assert.equal(semanticCalls, 0);
+
+  await searchProject(
+    { projectPath: ".", query: "how does the feature workflow work", mode: "auto", includeSummary: false },
+    { dependencies },
+  );
+  assert.deepEqual(includeSummaryInputs, [undefined, false]);
 });
 
 test("auto mode falls back once only for an empty exact or graph route", async () => {

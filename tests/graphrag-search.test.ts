@@ -16,7 +16,8 @@ import { searchGraphRag } from "../src/graphrag-search.js";
 import { deriveProjectIndexIdentity } from "../src/index-state.js";
 import type { SemanticSearchResult } from "../src/result-format.js";
 import { buildProjectSummary } from "../src/summary-indexer.js";
-import { saveProjectSummary } from "../src/summary-store.js";
+import { loadProjectSummary, saveProjectSummary } from "../src/summary-store.js";
+import { createGraphRagSummaryFixture } from "./graphrag-fixture.js";
 import { writeProjectConfig } from "./project-config-fixture.js";
 
 function hash(text: string): string {
@@ -24,95 +25,11 @@ function hash(text: string): string {
 }
 
 test("GraphRAG bounds hierarchy summaries by maxResults and keeps the most relevant modules", async () => {
-  const root = await mkdtemp(path.join(tmpdir(), "project-context-graphrag-bounds-"));
-  const stateRoot = path.join(root, "state");
-  const indexedAt = "2026-09-11T00:00:00.000Z";
-  const callerText = "export function a(): void { b(); c(); d(); }\n";
+  const fixture = await createGraphRagSummaryFixture();
   try {
-    await writeProjectConfig(root, "version: 1\nsources:\n  code: [src]\n  documents: []\n");
-    const node = async (name: string, text: string) => {
-      await mkdir(path.join(root, "src", name), { recursive: true });
-      await writeFile(path.join(root, "src", name, `${name}.ts`), text, "utf8");
-      return {
-        name,
-        fullName: name,
-        signature: "(): void",
-        kind: "function",
-        path: `src/${name}/${name}.ts`,
-        lineStart: 1,
-        lineEnd: 1,
-        fileHash: hash(text),
-      };
-    };
-    const caller = await node("a", callerText);
-    const callees = [
-      await node("b", "export function b(): void {}\n"),
-      await node("c", "export function c(): void {}\n"),
-      await node("d", "export function d(): void {}\n"),
-    ];
-    const config = await loadProjectConfig(root);
-    const identity = deriveProjectIndexIdentity(root, config.value);
-    const shard = createGraphShard("typescript", "fixture", {
-      workerVersion: "fixture/1.0",
-      nodes: [caller, ...callees],
-      results: callees.map((callee) => ({
-        relation: "calls",
-        from: caller,
-        to: callee,
-        evidence: { path: caller.path, lineStart: 1, lineEnd: 1, fileHash: caller.fileHash },
-      })),
-      diagnostics: { filesRequested: 4, filesLoaded: 4, filesSkipped: 0, partial: false, elapsedMs: 1, messages: [] },
-      truncated: false,
-    });
-    await saveProjectGraph(identity, {
-      projectRoot: root,
-      projectSlug: identity.projectSlug,
-      collectionName: identity.collectionName,
-      indexedAt,
-      commit: null,
-      shards: [shard],
-      diagnostics: [],
-    }, stateRoot);
-    const graph = await loadProjectGraph(identity, stateRoot);
-    const hierarchy = buildProjectSummary({ config: config.value, graph: graph.value!, shards: [shard] });
-    await saveProjectSummary(identity, {
-      projectRoot: root,
-      projectSlug: identity.projectSlug,
-      collectionName: identity.collectionName,
-      indexedAt,
-      commit: null,
-      graphFingerprint: graphManifestFingerprint(graph.value!),
-      modules: hierarchy.modules,
-      diagnostics: hierarchy.diagnostics,
-      truncated: hierarchy.truncated,
-    }, stateRoot);
-    const semantic: SemanticSearchResult = {
-      route: "semantic",
-      fallbackUsed: false,
-      query: "caller workflow",
-      scope: "code",
-      commit: null,
-      indexCommit: null,
-      indexedAt,
-      stale: false,
-      queryExpansion: { used: false, model: null, expandedQuery: null, identifierQuery: null, error: null },
-      staleResultsSkipped: 0,
-      results: [{
-        source: "code",
-        path: caller.path,
-        matchKind: "semantic",
-        lineStart: 1,
-        lineEnd: 1,
-        text: callerText.trim(),
-        score: 0.9,
-        indexedAt,
-        commit: null,
-      }],
-      truncated: false,
-    };
     const search = (maxResults: number) => searchGraphRag(
-      { projectPath: root, query: "caller workflow", scope: "code", maxResults },
-      { stateRoot, dependencies: { searchSemantic: async () => semantic } },
+      { projectPath: fixture.root, query: "caller workflow", scope: "code", maxResults },
+      { stateRoot: fixture.stateRoot, dependencies: { searchSemantic: async () => fixture.semantic } },
     );
 
     const wide = await search(10);
@@ -132,7 +49,59 @@ test("GraphRAG bounds hierarchy summaries by maxResults and keeps the most relev
     assert.equal(narrow.graph?.summaries?.truncated, true);
     assert.equal(narrow.graph?.summaries?.modules.every((module) => module.nodes.length <= 1), true);
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await fixture.cleanup();
+  }
+});
+
+test("GraphRAG omits hierarchy summaries without loading the sidecar when they are not requested", async () => {
+  const fixture = await createGraphRagSummaryFixture();
+  try {
+    let summaryLoads = 0;
+    const search = (includeSummary?: boolean) => searchGraphRag(
+      {
+        projectPath: fixture.root,
+        query: "caller workflow",
+        scope: "code",
+        maxResults: 10,
+        ...(includeSummary === undefined ? {} : { includeSummary }),
+      },
+      {
+        stateRoot: fixture.stateRoot,
+        dependencies: {
+          searchSemantic: async () => fixture.semantic,
+          loadProjectSummary: async (...args) => {
+            summaryLoads += 1;
+            return loadProjectSummary(...args);
+          },
+        },
+      },
+    );
+
+    const byDefault = await search();
+    const requested = await search(true);
+    assert.equal(summaryLoads, 2);
+    assert.equal(byDefault.graph?.summaries?.modules.length, 6);
+    assert.deepEqual(requested, byDefault);
+
+    const omitted = await search(false);
+    assert.equal(summaryLoads, 2);
+    assert.equal(omitted.route, "graphrag");
+    assert.equal(omitted.graph?.summaries, undefined);
+    assert.equal("summaries" in (omitted.graph ?? {}), false);
+    const { summaries: _summaries, ...graphWithoutSummaries } = byDefault.graph!;
+    assert.deepEqual(omitted.graph, graphWithoutSummaries);
+    assert.deepEqual(omitted.results, byDefault.results);
+    assert.deepEqual(
+      omitted.results.map((result) => [result.path, result.lineStart, result.lineEnd]),
+      [
+        ["src/a/a.ts", 1, 1],
+        ["src/b/b.ts", 1, 1],
+        ["src/c/c.ts", 1, 1],
+        ["src/d/d.ts", 1, 1],
+      ],
+    );
+  } finally {
+    await fixture.cleanup();
   }
 });
 

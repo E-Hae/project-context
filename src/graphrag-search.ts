@@ -170,6 +170,8 @@ export async function searchGraphRag(
     query: string;
     scope: SearchScope;
     maxResults: number;
+    /** Defaults to true; false skips the hierarchy sidecar and omits `graph.summaries`. */
+    includeSummary?: boolean;
   },
   options: {
     stateRoot?: string;
@@ -219,8 +221,11 @@ export async function searchGraphRag(
     return semanticFallback(semantic, input.maxResults);
   }
   let summaryPayload: Awaited<ReturnType<typeof loadProjectSummaryPayload>>["value"] = null;
-  const loadedSummary = await dependencies.loadProjectSummary(identity, stateRoot);
+  const loadedSummary = input.includeSummary === false
+    ? null
+    : await dependencies.loadProjectSummary(identity, stateRoot);
   if (
+    loadedSummary !== null &&
     loadedSummary.valid && loadedSummary.value !== null &&
     normalizePathForComparison(loadedSummary.value.projectRoot) ===
       normalizePathForComparison(indexRoot) &&

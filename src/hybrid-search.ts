@@ -282,6 +282,8 @@ export async function searchProject(
     scope?: SearchScope;
     maxResults?: number;
     language?: string;
+    /** GraphRAG hierarchy summaries on the auto route; defaults to true. */
+    includeSummary?: boolean;
   },
   options: HybridSearchOptions = {},
 ): Promise<HybridSearchResult> {
@@ -375,6 +377,7 @@ export async function searchProject(
           query: input.query,
           scope,
           maxResults,
+          ...(input.includeSummary === undefined ? {} : { includeSummary: input.includeSummary }),
         },
         {
           ...(options.stateRoot === undefined ? {} : { stateRoot: options.stateRoot }),

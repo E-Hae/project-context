@@ -65,7 +65,7 @@ export function createProjectContextServer(
     },
     {
       instructions:
-        "Use context_status before project-context operations to verify project scope and local dependencies.",
+        "Call context_status to verify project scope and local dependencies only when first entering a project, when the project root changes, when the project configuration or index changes (including a reindex), or after a dependency failure; otherwise reuse the earlier status result for that project root.",
     },
   );
 
@@ -116,6 +116,10 @@ export function createProjectContextServer(
         scope: z.enum(["all", "code", "documents"]).default("all"),
         maxResults: z.number().int().min(1).max(200).default(MCP_DEFAULT_MAX_RESULTS),
         language: z.string().min(1).max(128).optional().describe("Trace adapter language for graph routing"),
+        includeSummary: z
+          .boolean()
+          .default(false)
+          .describe("Include graph.summaries hierarchy context when an auto search returns route graphrag"),
       },
       annotations: {
         readOnlyHint: true,
@@ -124,7 +128,7 @@ export function createProjectContextServer(
         openWorldHint: false,
       },
     },
-    async ({ projectPath, query, mode, scope, maxResults, language }) => {
+    async ({ projectPath, query, mode, scope, maxResults, language, includeSummary }) => {
       try {
         const result = await (options.search ?? searchProject)({
           projectPath,
@@ -132,6 +136,7 @@ export function createProjectContextServer(
           mode,
           scope,
           maxResults,
+          includeSummary,
           ...(language === undefined ? {} : { language }),
         });
         return successfulToolResult(result);

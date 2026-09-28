@@ -10,7 +10,10 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 
 import { createProjectContextServer } from "../src/mcp-server.js";
 import { GraphTraceError } from "../src/graph-client.js";
+import { searchGraphRag, type GraphRagSearchResult } from "../src/graphrag-search.js";
+import { searchProject } from "../src/hybrid-search.js";
 import type { SemanticSearchResult } from "../src/result-format.js";
+import { createGraphRagSummaryFixture } from "./graphrag-fixture.js";
 import { writeProjectConfig } from "./project-config-fixture.js";
 
 function serializedCharacterCount(value: unknown): number {
@@ -23,6 +26,7 @@ function occurrenceCount(text: string, marker: string): number {
 
 test("MCP success responses serialize the full payload only once", async () => {
   const receivedMaxResults: number[] = [];
+  const receivedIncludeSummary: Array<boolean | undefined> = [];
   const marker = "representative-result-body-".repeat(200);
   const result: SemanticSearchResult = {
     route: "semantic",
@@ -57,8 +61,9 @@ test("MCP success responses serialize the full payload only once", async () => {
     truncated: false,
   };
   const server = createProjectContextServer({
-    search: async ({ maxResults }) => {
+    search: async ({ maxResults, includeSummary }) => {
       receivedMaxResults.push(maxResults ?? -1);
+      receivedIncludeSummary.push(includeSummary);
       return result;
     },
   });
@@ -98,6 +103,13 @@ test("MCP success responses serialize the full payload only once", async () => {
     });
     assert.equal(overLimit.isError, true);
     assert.deepEqual(receivedMaxResults, [10, 50]);
+
+    const withSummary = await client.callTool({
+      name: "context_search",
+      arguments: { projectPath: ".", query: "fixture", includeSummary: true },
+    });
+    assert.equal(withSummary.isError, undefined);
+    assert.deepEqual(receivedIncludeSummary, [false, false, true]);
   } finally {
     await client.close();
     await server.close();
@@ -155,6 +167,52 @@ test("context_search keeps the semantic route when GraphRAG metadata is present"
   } finally {
     await client.close();
     await server.close();
+  }
+});
+
+test("context_search omits GraphRAG summaries over MCP unless they are requested", async () => {
+  const fixture = await createGraphRagSummaryFixture();
+  const server = createProjectContextServer({
+    search: (input) => searchProject(input, {
+      stateRoot: fixture.stateRoot,
+      dependencies: {
+        searchGraphRag: (graphInput, graphOptions) => searchGraphRag(graphInput, {
+          ...graphOptions,
+          dependencies: { searchSemantic: async () => fixture.semantic },
+        }),
+      },
+    }),
+  });
+  const client = new Client({ name: "summary-size-test", version: "0.1.0" });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  await server.connect(serverTransport);
+  await client.connect(clientTransport);
+  try {
+    const call = (extra: { includeSummary?: boolean }) => client.callTool({
+      name: "context_search",
+      arguments: { projectPath: fixture.root, query: "workflow overview", ...extra },
+    });
+    const byDefault = await call({});
+    const requested = await call({ includeSummary: true });
+    const defaultContent = byDefault.structuredContent as unknown as GraphRagSearchResult;
+    const requestedContent = requested.structuredContent as unknown as GraphRagSearchResult;
+
+    assert.equal(byDefault.isError, undefined);
+    assert.equal(requested.isError, undefined);
+    assert.equal(defaultContent.route, "graphrag");
+    assert.equal(defaultContent.graph?.expandedNodes, 3);
+    assert.equal(defaultContent.graph?.summaries, undefined);
+    assert.equal(requestedContent.graph?.summaries?.modules.length, 6);
+    assert.equal(defaultContent.results.length, 4);
+    assert.deepEqual(defaultContent.results, requestedContent.results);
+    assert.ok(
+      serializedCharacterCount(requested) - serializedCharacterCount(byDefault) >=
+        serializedCharacterCount(requestedContent.graph?.summaries),
+    );
+  } finally {
+    await client.close();
+    await server.close();
+    await fixture.cleanup();
   }
 });
 
@@ -259,6 +317,11 @@ test("context_status is exposed through MCP and returns structured content", asy
       assert.equal(maxResults?.default, 10);
       assert.equal(maxResults?.maximum, 200);
     }
+    const includeSummary = (tools.tools.find((candidate) => candidate.name === "context_search")
+      ?.inputSchema.properties as Record<string, unknown> | undefined)
+      ?.includeSummary as { type?: unknown; default?: unknown } | undefined;
+    assert.equal(includeSummary?.type, "boolean");
+    assert.equal(includeSummary?.default, false);
 
     const result = await client.callTool({
       name: "context_status",
@@ -465,6 +528,30 @@ test("context_search forwards an optional graph language", async () => {
     });
     assert.equal(result.isError, undefined);
     assert.equal(receivedLanguage, "csharp");
+  } finally {
+    await client.close();
+    await server.close();
+  }
+});
+
+test("the MCP server instructions limit context_status to its refresh conditions", async () => {
+  const server = createProjectContextServer();
+  const client = new Client({ name: "project-context-test", version: "0.1.0" });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  await server.connect(serverTransport);
+  await client.connect(clientTransport);
+  try {
+    const instructions = client.getInstructions() ?? "";
+    for (const condition of [
+      /first entering a project/,
+      /project root changes/,
+      /configuration or index changes \(including a reindex\)/,
+      /dependency failure/,
+      /otherwise reuse the earlier status result/,
+    ]) {
+      assert.match(instructions, condition);
+    }
+    assert.doesNotMatch(instructions, /before project-context operations/);
   } finally {
     await client.close();
     await server.close();
