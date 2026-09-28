@@ -91,7 +91,32 @@ Add this standard MCP server entry to your client's configuration:
 
 The server exposes `context_status`, `context_search`, `context_read`,
 `context_trace`, `context_impact`, and the `context_handoff_*` tools. Start with
-`context_status` to confirm the selected project and local dependencies.
+`context_status` to confirm the selected project and local dependencies. The
+server instructions ask clients to call it again only when the project root,
+configuration, or index changes, or after a dependency failure, and otherwise
+to reuse the earlier result.
+
+### MCP responses and limits
+
+A successful MCP call returns the full result once, in `structuredContent`.
+The text `content` carries only a short notice that points there, so a client
+that reads only the text channel no longer receives the result as JSON; Claude
+Code and Codex CLI both pass `structuredContent` to the model. Errors still
+return `isError: true` with a plain message.
+
+`context_search`, `context_trace`, and `context_impact` return up to 10 results
+over MCP. Pass `maxResults` to ask for more, up to 200; `truncated: true` means
+results may have been left out. The CLI keeps its default of 50.
+
+`context_read` and `pctx read` return 100 lines when `endLine` is omitted and
+at most 200 lines or 50,000 characters, newlines included, per call. A request
+for more than 200 lines is rejected. A read that reaches the character limit
+stops before the line that would cross it; `hasMore` and `nextStartLine` say
+where to continue, and `nextStartLine` is `null` at the end of the file. A
+single line longer than 50,000 characters is rejected.
+
+Over MCP, `context_search` leaves out `graph.summaries` unless the request sets
+`includeSummary: true`. The CLI still includes it.
 
 ## Requirements
 
@@ -172,9 +197,9 @@ adapters remain compatible and simply do not contribute a GraphRAG shard.
 When graph data is available, indexing also builds an immutable hierarchy
 sidecar from project, configured code-root, and directory modules. It contains
 only node, edge, and source locators; no LLM-generated summary text or source
-excerpts are stored. `auto` search returns optional `graph.summaries` only when
-the hierarchy fingerprint, index identity, commit, graph checksum, and current
-source hashes all still match. Missing, stale, or invalid hierarchy data is
+excerpts are stored. `auto` search returns optional `graph.summaries` (over
+MCP, only with `includeSummary: true`) when the hierarchy fingerprint, index
+identity, commit, graph checksum, and current source hashes all still match. Missing, stale, or invalid hierarchy data is
 silently omitted while ordinary semantic and graph-backed evidence remains
 available. Reindex after upgrading to refresh graph and hierarchy snapshots.
 

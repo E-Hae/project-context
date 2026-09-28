@@ -2,6 +2,16 @@
 
 All notable changes to Project Context MCP are documented in this file.
 
+## Unreleased
+
+### Changed
+
+- `context_read` and `pctx read` return 100 lines when `endLine` is omitted, down from 200, and at most 200 lines and 50,000 characters per call, down from 400 lines and 200,000 characters. A request for more than 200 lines is rejected. A range that crosses the character limit now returns the complete lines before it instead of failing, and a single line longer than 50,000 characters is rejected.
+- Reads report `hasMore` and `nextStartLine`, so a client can continue from the next line without gaps or overlap; `nextStartLine` is `null` at the end of the file.
+- Over MCP, `context_search` omits `graph.summaries` unless the request sets the new `includeSummary: true`, and skips loading the hierarchy sidecar otherwise. The CLI and the library still include summaries by default.
+- The MCP server instructions ask clients to call `context_status` again only when the project root, configuration, or index changes, or after a dependency failure, and otherwise to reuse the earlier result.
+- Together with the 2.7.2 changes, measured on the same fixtures against 2.7.1, a default MCP search is 91% smaller (29,754 to 2,535 characters) and a default read is 74% smaller (14,627 to 3,758 characters).
+
 ## 2.7.2 - 2026-09-16
 
 ### Changed
