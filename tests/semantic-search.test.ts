@@ -6,9 +6,10 @@ import path from "node:path";
 import test from "node:test";
 
 import { loadProjectConfig } from "../src/config.js";
-import type { EmbeddingProvider } from "../src/embedding-client.js";
+import { embeddingPromptFingerprint, type EmbeddingProvider } from "../src/embedding-client.js";
 import {
   deriveProjectIndexIdentity,
+  loadProjectIndexState,
   saveProjectIndexState,
 } from "../src/index-state.js";
 import type {
@@ -48,6 +49,7 @@ test("searchSemantic returns one fresh evidence result per file", async () => {
         collectionName: identity.collectionName,
         vectorStoreBackend: "local",
         embeddingModel: "fixture-embedding",
+        embeddingPromptFingerprint: embeddingPromptFingerprint("fixture-embedding"),
         embeddingDimension: 2,
         indexedAt: "2026-07-14T00:00:00.000Z",
         commit: null,
@@ -192,6 +194,17 @@ test("searchSemantic returns one fresh evidence result per file", async () => {
       new Set(fusedResult.results.map((item) => item.path)),
       new Set(["src/Feature.cs", "docs/design.md"]),
     );
+    const savedState = (await loadProjectIndexState(identity, stateRoot)).value!;
+    for (const fingerprint of ["a".repeat(64), undefined]) {
+      await saveProjectIndexState(identity, {
+        ...savedState,
+        embeddingPromptFingerprint: fingerprint,
+      }, stateRoot);
+      await assert.rejects(searchSemantic(
+        { projectPath: root, query: "where is storage?" },
+        { stateRoot },
+      ), /incompatible.*reindex/);
+    }
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -232,6 +245,7 @@ test("searchSemantic validates handoff evidence from the Markdown source", async
         collectionName: identity.collectionName,
         vectorStoreBackend: "local",
         embeddingModel: "fixture-embedding",
+        embeddingPromptFingerprint: embeddingPromptFingerprint("fixture-embedding"),
         embeddingDimension: 2,
         indexedAt: "2026-07-14T00:00:00.000Z",
         commit: null,
@@ -343,6 +357,7 @@ test("searchSemantic reuses the main worktree index from a linked worktree", asy
         collectionName: identity.collectionName,
         vectorStoreBackend: "local",
         embeddingModel: "fixture-embedding",
+        embeddingPromptFingerprint: embeddingPromptFingerprint("fixture-embedding"),
         embeddingDimension: 2,
         indexedAt: "2026-07-14T00:00:00.000Z",
         commit: mainCommit,

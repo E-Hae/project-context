@@ -26,6 +26,7 @@ test("loadProjectConfig ignores a root-level config file", async () => {
     assert.equal(loaded.value.sources.handoff.enabled, false);
     assert.deepEqual(loaded.value.sources.semanticExclude, []);
     assert.equal(loaded.value.services.vectorStore.backend, "local");
+    assert.equal(loaded.value.services.ollama.embeddingModel, "qwen3-embedding:0.6b");
     assert.equal(loaded.value.index.reuseMainWorktree, false);
   } finally {
     await rm(root, { recursive: true, force: true });

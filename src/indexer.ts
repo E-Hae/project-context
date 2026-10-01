@@ -4,6 +4,7 @@ import { chunkDocument, type DocumentChunk } from "./chunker.js";
 import { loadProjectConfig, type ProjectContextConfig } from "./config.js";
 import {
   OllamaEmbeddingClient,
+  embeddingPromptFingerprint,
   withEmbeddingRetry,
   type EmbeddingProvider,
 } from "./embedding-client.js";
@@ -558,6 +559,7 @@ export async function indexProject(
       collectionName: identity.collectionName,
       vectorStoreBackend: config.services.vectorStore.backend,
       embeddingModel: embedding.model,
+      embeddingPromptFingerprint: embeddingPromptFingerprint(embedding.model),
       embeddingDimension: dimension,
       indexedAt,
       commit: project.commit,

@@ -4,9 +4,11 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { loadProjectConfig } from "../src/config.js";
+import { DEFAULT_CONFIG, loadProjectConfig } from "../src/config.js";
+import { embeddingPromptFingerprint } from "../src/embedding-client.js";
 import {
   deriveProjectIndexIdentity,
+  loadProjectIndexState,
   saveProjectIndexState,
 } from "../src/index-state.js";
 import {
@@ -67,6 +69,7 @@ test("collectProjectStatus does not degrade when no trace adapter is installed",
         projectSlug: identity.projectSlug,
         collectionName: identity.collectionName,
         embeddingModel: config.services.ollama.embeddingModel,
+        embeddingPromptFingerprint: embeddingPromptFingerprint(config.services.ollama.embeddingModel),
         embeddingDimension: 768,
         indexedAt: "2026-07-14T00:00:00.000Z",
         commit: "0123456789abcdef",
@@ -115,7 +118,7 @@ test("collectProjectStatus does not degrade when no trace adapter is installed",
       }
       assert.equal(input.toString(), "http://localhost:11434/ollama/api/tags");
       return new Response(
-        JSON.stringify({ models: [{ name: "nomic-embed-text:v1.5" }] }),
+        JSON.stringify({ models: [{ name: DEFAULT_CONFIG.services.ollama.embeddingModel }] }),
         { status: 200, headers: { "content-type": "application/json" } },
       );
     };
@@ -150,6 +153,23 @@ test("collectProjectStatus does not degrade when no trace adapter is installed",
     assert.equal(status.index.graph.state, "missing");
     assert.equal(status.index.graph.summary.state, "missing");
     assert.deepEqual(status.missing, []);
+
+    const savedState = (await loadProjectIndexState(identity, stateRoot)).value!;
+    for (const fingerprint of ["a".repeat(64), undefined]) {
+      await saveProjectIndexState(identity, {
+        ...savedState,
+        embeddingPromptFingerprint: fingerprint,
+      }, stateRoot);
+      const profileStatus = await collectProjectStatus(root, {
+        dependencies: {
+          runCommand, fetch: fetchMock, probeTcp: async () => true,
+          handoffRoot, packageRoot, stateRoot,
+        },
+      });
+      assert.equal(profileStatus.index.state, "stale");
+      assert.equal(profileStatus.missing.includes("index:stale"), true);
+    }
+    await saveProjectIndexState(identity, savedState, stateRoot);
 
     collectionLoadState = "LoadStateLoading";
     collectionLoadProgress = 0;
@@ -230,6 +250,7 @@ test("collectProjectStatus normalizes Windows graph snapshot roots", {
         collectionName: identity.collectionName,
         vectorStoreBackend: "local",
         embeddingModel: config.services.ollama.embeddingModel,
+        embeddingPromptFingerprint: embeddingPromptFingerprint(config.services.ollama.embeddingModel),
         embeddingDimension: 2,
         indexedAt,
         commit,
@@ -295,7 +316,7 @@ test("collectProjectStatus normalizes Windows graph snapshot roots", {
           return { ok: false, stdout: "", stderr: "not found", error: "not found" };
         },
         fetch: async () => Response.json({
-          models: [{ name: "nomic-embed-text:v1.5" }],
+          models: [{ name: DEFAULT_CONFIG.services.ollama.embeddingModel }],
         }),
         stateRoot,
         discoverTraceAdapters: async () => ({
@@ -328,7 +349,7 @@ test("collectProjectStatus reports a malformed trace probe as unavailable", asyn
           if (command === "rg") return { ok: true, stdout: "ripgrep 14.1.1", stderr: "" };
           return { ok: false, stdout: "", stderr: "not found", error: "not found" };
         },
-        fetch: async () => Response.json({ models: [{ name: "nomic-embed-text:v1.5" }] }),
+        fetch: async () => Response.json({ models: [{ name: DEFAULT_CONFIG.services.ollama.embeddingModel }] }),
         discoverTraceAdapters: async () => ({
           candidates: ["malformed-adapter"],
           adapters: [{
@@ -372,7 +393,7 @@ test("collectProjectStatus does not probe Milvus when the local vector store is 
           return { ok: false, stdout: "", stderr: "not found", error: "not found" };
         },
         fetch: async () => Response.json({
-          models: [{ name: "nomic-embed-text:v1.5" }],
+          models: [{ name: DEFAULT_CONFIG.services.ollama.embeddingModel }],
         }),
         probeTcp: async () => {
           probeCalls += 1;
@@ -409,6 +430,7 @@ test("collectProjectStatus invalidates a local index whose collection is missing
         collectionName: identity.collectionName,
         vectorStoreBackend: "local",
         embeddingModel: config.services.ollama.embeddingModel,
+        embeddingPromptFingerprint: embeddingPromptFingerprint(config.services.ollama.embeddingModel),
         embeddingDimension: 2,
         indexedAt: "2026-07-23T00:00:00.000Z",
         commit: "0123456789abcdef",
@@ -436,7 +458,7 @@ test("collectProjectStatus invalidates a local index whose collection is missing
           return { ok: false, stdout: "", stderr: "not found", error: "not found" };
         },
         fetch: async () => Response.json({
-          models: [{ name: "nomic-embed-text:v1.5" }],
+          models: [{ name: DEFAULT_CONFIG.services.ollama.embeddingModel }],
         }),
         probeTcp: async () => {
           probeCalls += 1;
@@ -484,7 +506,7 @@ test("collectProjectStatus degrades when Git metadata is unavailable", async () 
         },
         fetch: async () =>
           new Response(
-            JSON.stringify({ models: [{ name: "nomic-embed-text:v1.5" }] }),
+            JSON.stringify({ models: [{ name: DEFAULT_CONFIG.services.ollama.embeddingModel }] }),
             { status: 200, headers: { "content-type": "application/json" } },
           ),
         probeTcp: async () => true,
@@ -551,6 +573,7 @@ test("collectProjectStatus reports a reused main worktree index as fresh", async
         collectionName: identity.collectionName,
         vectorStoreBackend: "local",
         embeddingModel: "fixture-embedding",
+        embeddingPromptFingerprint: embeddingPromptFingerprint("fixture-embedding"),
         embeddingDimension: 2,
         indexedAt: "2026-07-14T00:00:00.000Z",
         commit: mainCommit,

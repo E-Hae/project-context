@@ -2,6 +2,14 @@
 
 All notable changes to Project Context MCP are documented in this file.
 
+## Unreleased
+
+### Changed
+
+- The default embedding model is now `qwen3-embedding:0.6b`; projects can still choose another installed model with `services.ollama.embeddingModel`.
+- Embedding inputs follow the model family: Qwen3 queries use a code-search instruction and documents stay unchanged; Nomic keeps its retrieval prefixes; other models receive unchanged text.
+- Index state records a fingerprint of the effective query and document prompts. A changed prompt format, model change, or legacy index without the fingerprint triggers a full rebuild on the next indexing run.
+
 ## 2.8.0 - 2026-09-28
 
 ### Added

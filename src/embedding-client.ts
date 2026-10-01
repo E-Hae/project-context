@@ -1,4 +1,38 @@
+import { createHash } from "node:crypto";
+
 import type { ProjectContextConfig } from "./config.js";
+
+interface EmbeddingPromptProfile {
+  readonly queryPrefix: string;
+  readonly documentPrefix: string;
+}
+
+const NOMIC_PROFILE: EmbeddingPromptProfile = {
+  queryPrefix: "search_query: ",
+  documentPrefix: "search_document: ",
+};
+const QWEN3_PROFILE: EmbeddingPromptProfile = {
+  queryPrefix:
+    "Instruct: Given a code search query, retrieve relevant code snippets or documentation that answer the query.\nQuery:",
+  documentPrefix: "",
+};
+const RAW_PROFILE: EmbeddingPromptProfile = {
+  queryPrefix: "",
+  documentPrefix: "",
+};
+
+function embeddingPromptProfile(model: string): EmbeddingPromptProfile {
+  if (model.startsWith("nomic-embed-text")) return NOMIC_PROFILE;
+  if (model.startsWith("qwen3-embedding")) return QWEN3_PROFILE;
+  return RAW_PROFILE;
+}
+
+export function embeddingPromptFingerprint(model: string): string {
+  // Hash the effective text format so edits to either prefix invalidate vectors.
+  return createHash("sha256")
+    .update(JSON.stringify(embeddingPromptProfile(model)))
+    .digest("hex");
+}
 
 type OllamaEmbeddingConfig = Pick<
   ProjectContextConfig["services"]["ollama"],
@@ -42,6 +76,7 @@ interface OllamaEmbedResponse {
 export class OllamaEmbeddingClient implements EmbeddingProvider {
   readonly model: string;
   private readonly endpoint: URL;
+  private readonly promptProfile: EmbeddingPromptProfile;
 
   constructor(
     config: OllamaEmbeddingConfig,
@@ -49,11 +84,12 @@ export class OllamaEmbeddingClient implements EmbeddingProvider {
     private readonly timeoutMs = 120_000,
   ) {
     this.model = config.embeddingModel;
+    this.promptProfile = embeddingPromptProfile(this.model);
     const baseUrl = config.url.endsWith("/") ? config.url : `${config.url}/`;
     this.endpoint = new URL("api/embed", baseUrl);
   }
 
-  private async embed(texts: string[], prefix: "search_document" | "search_query") {
+  private async embed(texts: string[], prefix: string) {
     if (texts.length < 1 || texts.length > 64) {
       throw new Error("Embedding requests must contain between 1 and 64 texts");
     }
@@ -68,7 +104,7 @@ export class OllamaEmbeddingClient implements EmbeddingProvider {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           model: this.model,
-          input: texts.map((text) => `${prefix}: ${text}`),
+          input: texts.map((text) => `${prefix}${text}`),
           truncate: false,
           keep_alive: "10m",
         }),
@@ -121,16 +157,16 @@ export class OllamaEmbeddingClient implements EmbeddingProvider {
   }
 
   async probeDimension(): Promise<number> {
-    const vectors = await this.embed(["project context dimension probe"], "search_document");
+    const vectors = await this.embedDocuments(["project context dimension probe"]);
     return vectors[0]!.length;
   }
 
   embedDocuments(texts: string[]): Promise<number[][]> {
-    return this.embed(texts, "search_document");
+    return this.embed(texts, this.promptProfile.documentPrefix);
   }
 
   async embedQuery(text: string): Promise<number[]> {
-    const vectors = await this.embed([text], "search_query");
+    const vectors = await this.embed([text], this.promptProfile.queryPrefix);
     return vectors[0]!;
   }
 }

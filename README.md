@@ -59,9 +59,10 @@ npm install --global project-context-mcp-git
 ```
 
 Then add a `.project-context/config.yml` file to the project you want
-to inspect and run a status check:
+to inspect. Install the default embedding model and run a status check:
 
 ```sh
+ollama pull qwen3-embedding:0.6b
 pctx status /path/to/project
 pctx index /path/to/project
 pctx search /path/to/project "session restore" auto code 10
@@ -300,15 +301,32 @@ resolves them against its main worktree.
 
 ### Semantic search services
 
-Semantic search needs an Ollama embedding model that you operate and configure
-for the project. The vector store is local and persistent by default, so no
+Semantic search uses `qwen3-embedding:0.6b` by default. Install it with
+`ollama pull qwen3-embedding:0.6b`, or choose another installed Ollama embedding
+model per project. The vector store is local and persistent by default, so no
 Milvus service is needed.
 
 ```yaml
 services:
   ollama:
-    embeddingModel: <installed-embedding-model>
+    embeddingModel: qwen3-embedding:0.6b
 ```
+
+The input format follows the configured model name:
+
+| Model name | Query input | Document input |
+| --- | --- | --- |
+| `qwen3-embedding*` | `Instruct: {task_description}\nQuery:{query}` | Unchanged text |
+| `nomic-embed-text*` | `search_query: {query}` | `search_document: {text}` |
+| Any other model | Unchanged text | Unchanged text |
+
+The Qwen3 task description is: "Given a code search query, retrieve relevant code
+snippets or documentation that answer the query." Its format follows the
+[official model card](https://huggingface.co/Qwen/Qwen3-Embedding-0.6B).
+Other models receive no added instruction or prefix; select a supported model
+family if your model requires one. Changing the model or its effective query or
+document format marks the index stale and makes the next `pctx index` rebuild it
+fully. Existing indexes without a saved prompt fingerprint also rebuild once.
 
 ### Milvus opt-in
 

@@ -15,6 +15,7 @@ import path from "node:path";
 import { z } from "zod/v4";
 
 import type { ProjectContextConfig } from "./config.js";
+import { embeddingPromptFingerprint } from "./embedding-client.js";
 import type { SourceKind } from "./source-policy.js";
 import type { VectorStoreBackend } from "./vector-store.js";
 
@@ -46,6 +47,7 @@ export interface ProjectIndexState {
   collectionName: string;
   vectorStoreBackend?: VectorStoreBackend;
   embeddingModel: string;
+  embeddingPromptFingerprint?: string | undefined;
   embeddingDimension: number;
   indexedAt: string;
   commit: string | null;
@@ -66,6 +68,7 @@ const indexStateSchema = z.object({
   collectionName: z.string().min(1).max(255),
   vectorStoreBackend: z.enum(["local", "milvus"]).default("milvus"),
   embeddingModel: z.string().min(1).max(512),
+  embeddingPromptFingerprint: z.string().regex(/^[a-f0-9]{64}$/).optional(),
   embeddingDimension: z.number().int().min(2).max(32_768),
   indexedAt: z.iso.datetime(),
   commit: z.string().max(128).nullable(),
@@ -296,6 +299,8 @@ export function isCompatibleIndexState(
     (state.vectorStoreBackend ?? "milvus") ===
       config.services.vectorStore.backend &&
     state.embeddingModel === config.services.ollama.embeddingModel &&
+    state.embeddingPromptFingerprint ===
+      embeddingPromptFingerprint(config.services.ollama.embeddingModel) &&
     state.chunkerVersion === CHUNKER_VERSION
   );
 }

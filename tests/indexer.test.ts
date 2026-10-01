@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, unlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 
 import type { EmbeddingProvider } from "../src/embedding-client.js";
-import { loadProjectConfig } from "../src/config.js";
+import { loadProjectConfig, type ProjectContextConfig } from "../src/config.js";
 import type {
   CollectedSourceFile,
   IndexableFileRead,
@@ -109,6 +109,58 @@ function fixtureFiles(count: number): CollectedSourceFile[] {
     relativePath: `src/${String(index).padStart(2, "0")}.ts`,
   }));
 }
+
+test("indexProject fully rebuilds unchanged files after a prompt profile or model change", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "project-context-prompt-profile-"));
+  const stateRoot = path.join(root, "state");
+  const store = new MemoryVectorStore();
+  const options = {
+    stateRoot,
+    dependencies: {
+      createEmbeddingProvider: (config: ProjectContextConfig): EmbeddingProvider => ({
+        model: config.services.ollama.embeddingModel,
+        async probeDimension() { return 2; },
+        async embedDocuments(texts) { return texts.map((text) => [text.length, 1]); },
+        async embedQuery(text) { return [text.length, 1]; },
+      }),
+      createVectorStore: () => store,
+    },
+  };
+  try {
+    await writeProjectFixture(root, [{ name: "storage.ts", text: "export const storage = 1;\n" }]);
+    const first = await indexProject(root, options);
+    assert.equal(first.rebuiltCollection, true);
+    const unchanged = await indexProject(root, options);
+    assert.equal(unchanged.rebuiltCollection, false);
+    assert.equal(unchanged.filesUnchanged, 1);
+
+    for (const fingerprint of ["a".repeat(64), undefined]) {
+      const state = JSON.parse(await readFile(first.statePath, "utf8"));
+      state.embeddingPromptFingerprint = fingerprint;
+      await writeFile(first.statePath, JSON.stringify(state), "utf8");
+      const rebuilt = await indexProject(root, options);
+      assert.equal(rebuilt.rebuiltCollection, true);
+      assert.equal(rebuilt.filesIndexed, 1);
+      assert.equal(rebuilt.filesUnchanged, 0);
+      assert.ok(rebuilt.chunksUpserted > 0);
+      const next = await indexProject(root, options);
+      assert.equal(next.rebuiltCollection, false);
+      assert.equal(next.filesUnchanged, 1);
+    }
+    assert.equal(store.drops, 2);
+
+    await writeProjectConfig(root,
+      "version: 1\nsources:\n  code: [src]\n  documents: []\n  handoff:\n    enabled: false\nservices:\n  ollama:\n    embeddingModel: qwen3-embedding:0.6b\n",
+    );
+    const changedModel = await indexProject(root, options);
+    assert.equal(changedModel.rebuiltCollection, true);
+    assert.equal(changedModel.filesIndexed, 1);
+    assert.equal(changedModel.filesUnchanged, 0);
+    assert.notEqual(changedModel.collectionName, first.collectionName);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
 
 function fixtureRead(file: CollectedSourceFile): IndexableFileRead {
   const index = Number(file.relativePath.match(/\d+/)?.[0] ?? 0);

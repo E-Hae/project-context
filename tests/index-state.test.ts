@@ -5,9 +5,11 @@ import path from "node:path";
 import test from "node:test";
 
 import { DEFAULT_CONFIG } from "../src/config.js";
+import { embeddingPromptFingerprint } from "../src/embedding-client.js";
 import {
   acquireProjectIndexLock,
   deriveProjectIndexIdentity,
+  isCompatibleIndexState,
   loadProjectIndexState,
   saveProjectIndexState,
   type ProjectIndexState,
@@ -25,7 +27,8 @@ test("index state round-trips and lock rejects concurrent writers", async () => 
     collectionName: identity.collectionName,
     vectorStoreBackend: "local",
     embeddingModel: DEFAULT_CONFIG.services.ollama.embeddingModel,
-    embeddingDimension: 768,
+    embeddingPromptFingerprint: embeddingPromptFingerprint(DEFAULT_CONFIG.services.ollama.embeddingModel),
+    embeddingDimension: 1024,
     indexedAt: "2026-07-14T00:00:00.000Z",
     commit: null,
     files: {
@@ -42,6 +45,22 @@ test("index state round-trips and lock rejects concurrent writers", async () => 
     const loaded = await loadProjectIndexState(identity, stateRoot);
     assert.equal(loaded.valid, true);
     assert.deepEqual(loaded.value, state);
+    assert.equal(isCompatibleIndexState(state, projectRoot, DEFAULT_CONFIG, identity), true);
+    assert.equal(isCompatibleIndexState({
+      ...state,
+      embeddingPromptFingerprint: embeddingPromptFingerprint("nomic-embed-text:v1.5"),
+    }, projectRoot, DEFAULT_CONFIG, identity), false);
+    assert.equal(isCompatibleIndexState({
+      ...state,
+      embeddingModel: "nomic-embed-text:v1.5",
+    }, projectRoot, DEFAULT_CONFIG, identity), false);
+
+    // Old manifests still load, but cannot reuse vectors with an unrecorded format.
+    const { embeddingPromptFingerprint: _fingerprint, ...legacyState } = state;
+    await saveProjectIndexState(identity, legacyState, stateRoot);
+    const legacyLoaded = await loadProjectIndexState(identity, stateRoot);
+    assert.equal(legacyLoaded.valid, true);
+    assert.equal(isCompatibleIndexState(legacyLoaded.value!, projectRoot, DEFAULT_CONFIG, identity), false);
 
     const release = await acquireProjectIndexLock(identity, stateRoot);
     await assert.rejects(

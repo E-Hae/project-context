@@ -85,7 +85,7 @@ export const DEFAULT_CONFIG: ProjectContextConfig = {
   services: {
     ollama: {
       url: "http://127.0.0.1:11434",
-      embeddingModel: "nomic-embed-text:v1.5",
+      embeddingModel: "qwen3-embedding:0.6b",
       queryExpansionModel: null,
     },
     milvus: {
