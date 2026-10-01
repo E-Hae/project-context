@@ -791,6 +791,76 @@ test("indexProject embeds and upserts 65 chunks in batches of 64 and 1", async (
   }
 });
 
+test("indexProject paces embedding requests to the configured duty cycle", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "project-context-paced-index-"));
+  const stateRoot = path.join(root, "state");
+  const store = new MemoryVectorStore();
+  let clock = 0;
+  const sleeps: number[] = [];
+  const requestStarts: number[] = [];
+  const requests: number[] = [];
+  const originalUpsert = store.upsert.bind(store);
+  store.upsert = async (collection, entities) => {
+    clock += 150;
+    await originalUpsert(collection, entities);
+  };
+  try {
+    await writeProjectFixture(
+      root,
+      Array.from({ length: 5 }, (_, index) => ({
+        name: `Feature${index}.cs`,
+        text: `public class Feature${index} {}\n`,
+      })),
+    );
+    await writeProjectConfig(
+      root,
+      "version: 1\nsources:\n  code: [src]\n  documents: []\nindex:\n  embeddingBatchSize: 2\n  embeddingDutyCycle: 0.2\nservices:\n  ollama:\n    embeddingModel: fixture-embedding\n",
+    );
+    const fixtureEmbedding: EmbeddingProvider = {
+      model: "fixture-embedding",
+      async probeDimension() { return 2; },
+      async embedDocuments(texts) {
+        requestStarts.push(clock);
+        requests.push(texts.length);
+        clock += 100;
+        return texts.map((text) => [text.length, 1]);
+      },
+      async embedQuery(text) { return [text.length, 1]; },
+    };
+
+    const result = await indexProject(root, {
+      stateRoot,
+      dependencies: {
+        createEmbeddingProvider: () => fixtureEmbedding,
+        createVectorStore: () => store,
+        now: () => new Date("2026-07-14T00:00:00.000Z"),
+        nowMs: () => clock,
+        sleep: async (milliseconds) => {
+          sleeps.push(Math.round(milliseconds));
+          clock += milliseconds;
+        },
+      },
+    });
+
+    assert.deepEqual(requests, [2, 2, 1]);
+    // Each 100 ms request is followed by 400 ms of idle time; the 150 ms upsert
+    // already covers part of it, so only the remaining 250 ms is slept.
+    assert.deepEqual(sleeps, [250, 250]);
+    for (let index = 1; index < requestStarts.length; index += 1) {
+      assert.ok(requestStarts[index]! - requestStarts[index - 1]! >= 500 - 1e-6);
+    }
+    assert.deepEqual(result.embeddingLoad, {
+      batchSize: 2,
+      dutyCycle: 0.2,
+      requests: 3,
+      requestMs: 300,
+      idleWaitMs: 500,
+    });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("indexProject bisects input-length failures without changing vector order", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "project-context-split-index-"));
   const stateRoot = path.join(root, "state");
@@ -910,7 +980,7 @@ test("indexProject does not split non-length embedding failures", async () => {
 test("indexProject reports deterministic phase timings", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "project-context-timing-index-"));
   const stateRoot = path.join(root, "state");
-  const nowValues = [0, 10, 20, 30, 50, 60, 90, 100, 140, 150, 200, 220];
+  const nowValues = [0, 10, 20, 30, 50, 60, 65, 70, 75, 90, 100, 140, 150, 200, 220];
   try {
     await writeProjectFixture(root, [{ name: "Feature.cs", text: "public class Feature {}\n" }]);
     const fixtureEmbedding: EmbeddingProvider = {
@@ -938,6 +1008,13 @@ test("indexProject reports deterministic phase timings", async () => {
       delete: 40,
       saveState: 50,
       total: 220,
+    });
+    assert.deepEqual(result.embeddingLoad, {
+      batchSize: 64,
+      dutyCycle: 1,
+      requests: 1,
+      requestMs: 5,
+      idleWaitMs: 0,
     });
   } finally {
     await rm(root, { recursive: true, force: true });

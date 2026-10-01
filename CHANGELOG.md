@@ -4,6 +4,10 @@ All notable changes to Project Context MCP are documented in this file.
 
 ## Unreleased
 
+### Added
+
+- `index.embeddingBatchSize` (1-64, default 64) sets the number of chunks per embedding request, and `index.embeddingDutyCycle` (0.05-1, default 1) paces document embedding so each request takes at most that share of the time until the next request starts; over many requests this bounds the share of the embedding phase spent in requests, while a run of only a few requests can exceed it. Index summaries report the batch size, duty cycle, request count, request time, and pacing wait as `embeddingLoad`. Pacing bounds the time-averaged load only; it does not cap instantaneous GPU utilization or GPU memory.
+
 ### Changed
 
 - The default embedding model is now `qwen3-embedding:0.6b`; projects can still choose another installed model with `services.ollama.embeddingModel`.

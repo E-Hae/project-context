@@ -328,6 +328,62 @@ family if your model requires one. Changing the model or its effective query or
 document format marks the index stale and makes the next `pctx index` rebuild it
 fully. Existing indexes without a saved prompt fingerprint also rebuild once.
 
+### Embedding load
+
+Indexing sends document chunks to Ollama in batches of up to 64 and starts the
+next request as soon as the previous batch is stored. Two `index` settings slow
+this down for a machine whose GPU is shared with other work:
+
+```yaml
+index:
+  embeddingBatchSize: 16    # 1-64, default 64
+  embeddingDutyCycle: 0.2   # 0.05-1, default 1 (no pacing)
+```
+
+`embeddingDutyCycle` paces document embedding requests: after a request that
+took T ms, the next one starts no earlier than T / dutyCycle ms after the
+previous one started. At `0.2`, embedding requests take at most 20% of the time
+between consecutive request starts, so over a run of many requests indexing
+keeps the time-averaged GPU compute it causes near or below 20% when Ollama runs
+on the GPU and no other client uses the same model server. The last request has
+no wait after it, so a run of only a few requests can exceed that share. Pacing
+does not cap instantaneous utilization, which during each request stays what it
+is without pacing, nor dedicated or shared GPU memory, which depends on the
+model and Ollama's own settings. A smaller
+`embeddingBatchSize` shortens each request, so the load averages out over a
+shorter window. Indexing takes roughly 1 / dutyCycle times as long in its
+embedding phase. Query embedding during search is not paced. `pctx index`
+reports the effect as `embeddingLoad` (`requests`, `requestMs`, `idleWaitMs`).
+Neither setting changes the stored vectors, so changing them does not trigger a
+rebuild.
+
+The bound can be conservative because an unpaced run may leave the GPU partly
+idle: the paced load is roughly dutyCycle times the load of an unpaced run. To
+aim at a target, watch the Ollama process's GPU utilization during an unpaced
+run and set `embeddingDutyCycle` to about the target divided by that value.
+
+One test on an AMD Radeon RX 9070 XT with Ollama 0.35 at its default settings
+embedded 600 C# chunks from a Unity project in batches of 16 and searched them
+with 18 Korean and 18 matching English queries. GPU compute is the Ollama
+process's mean over the embedding phase from Windows GPU performance counters;
+hits count queries whose target file ranked first.
+
+| Model | Unpaced time per chunk | Unpaced GPU compute | Korean / English hits |
+|---|---|---|---|
+| `qwen3-embedding:0.6b` | 24 ms | 36% | 18 / 18 |
+| `nomic-embed-text:v1.5` | 14 ms | 57% | 1 / 17 |
+| `embeddinggemma:300m` | 17 ms | 62% | 16 / 17 |
+| `all-minilm:22m` | 5 ms, inputs truncated | about 20% | 1 / 16 |
+
+For `qwen3-embedding:0.6b`, `embeddingDutyCycle: 0.5` lowered GPU compute to
+about 20% and doubled the embedding time, and batch sizes from 4 to 64 or four
+concurrent requests did not change throughput. Time per chunk multiplied by GPU
+compute was similar for the first two models and higher for
+`embeddinggemma:300m`, so under the same load target neither alternative would
+meaningfully shorten indexing. `all-minilm:22m` was faster only with truncation:
+without it, as indexing sends inputs, 351 of the 600 chunks exceeded its
+context, because a chunk holds up to 1,600 characters plus a short file header.
+
 ### Milvus opt-in
 
 Use Milvus only when you explicitly select it. Configure the address for the

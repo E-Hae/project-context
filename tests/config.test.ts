@@ -28,6 +28,8 @@ test("loadProjectConfig ignores a root-level config file", async () => {
     assert.equal(loaded.value.services.vectorStore.backend, "local");
     assert.equal(loaded.value.services.ollama.embeddingModel, "qwen3-embedding:0.6b");
     assert.equal(loaded.value.index.reuseMainWorktree, false);
+    assert.equal(loaded.value.index.embeddingBatchSize, 64);
+    assert.equal(loaded.value.index.embeddingDutyCycle, 1);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -90,6 +92,36 @@ test("loadProjectConfig rejects the removed answerModel setting", async () => {
 
     assert.equal(loaded.valid, false);
     assert.match(loaded.errors.join("\n"), /answerModel/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("loadProjectConfig accepts bounded embedding load settings", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "project-context-config-"));
+  try {
+    await writeProjectConfig(
+      root,
+      "version: 1\nindex:\n  embeddingBatchSize: 8\n  embeddingDutyCycle: 0.2\n",
+    );
+    const loaded = await loadProjectConfig(root);
+    assert.equal(loaded.valid, true);
+    assert.equal(loaded.value.index.embeddingBatchSize, 8);
+    assert.equal(loaded.value.index.embeddingDutyCycle, 0.2);
+    assert.equal(loaded.value.index.reuseMainWorktree, false);
+
+    for (const invalid of [
+      "embeddingBatchSize: 0",
+      "embeddingBatchSize: 65",
+      "embeddingBatchSize: 1.5",
+      "embeddingDutyCycle: 0.04",
+      "embeddingDutyCycle: 1.1",
+    ]) {
+      await writeProjectConfig(root, `version: 1\nindex:\n  ${invalid}\n`);
+      const rejected = await loadProjectConfig(root);
+      assert.equal(rejected.valid, false, invalid);
+      assert.match(rejected.errors.join("\n"), /embedding(?:BatchSize|DutyCycle)/, invalid);
+    }
   } finally {
     await rm(root, { recursive: true, force: true });
   }

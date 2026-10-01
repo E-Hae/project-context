@@ -48,7 +48,6 @@ import {
 import { resolveIndexRoot, resolveProjectRoot } from "./project-path.js";
 import { isExcluded, resolveSourceTargets } from "./source-policy.js";
 
-const EMBEDDING_BATCH_SIZE = 64;
 const DELETE_BATCH_SIZE = 200;
 const FILE_READ_CONCURRENCY = 8;
 
@@ -81,6 +80,13 @@ export interface IndexSummary {
   chunksUpserted: number;
   chunksDeleted: number;
   rebuiltCollection: boolean;
+  embeddingLoad: {
+    batchSize: number;
+    dutyCycle: number;
+    requests: number;
+    requestMs: number;
+    idleWaitMs: number;
+  };
   graph?: {
     manifestPath: string | null;
     adaptersConsidered: number;
@@ -244,6 +250,49 @@ async function embedBatch(
   }
 }
 
+interface EmbeddingLoad {
+  requests: number;
+  requestMs: number;
+  idleWaitMs: number;
+}
+
+// Pace document embedding so request time stays at most dutyCycle of the
+// elapsed time: after a request that took T ms, the next one waits until
+// T * (1 - dutyCycle) / dutyCycle ms have passed. This bounds the time-averaged
+// share of wall time spent in embedding requests, not instantaneous GPU load or
+// memory.
+function pacedEmbedding(
+  embedding: EmbeddingProvider,
+  dutyCycle: number,
+  load: EmbeddingLoad,
+  nowMs: () => number,
+  sleep: (milliseconds: number) => Promise<void>,
+): EmbeddingProvider {
+  let nextRequestAt = Number.NEGATIVE_INFINITY;
+  return {
+    model: embedding.model,
+    probeDimension: () => embedding.probeDimension(),
+    embedQuery: (text) => embedding.embedQuery(text),
+    async embedDocuments(texts) {
+      const waitMs = nextRequestAt - nowMs();
+      if (waitMs > 0) {
+        await sleep(waitMs);
+        load.idleWaitMs += waitMs;
+      }
+      const startedAt = nowMs();
+      try {
+        return await embedding.embedDocuments(texts);
+      } finally {
+        const finishedAt = nowMs();
+        const requestMs = Math.max(0, finishedAt - startedAt);
+        load.requests += 1;
+        load.requestMs += requestMs;
+        nextRequestAt = finishedAt + (requestMs * (1 - dutyCycle)) / dutyCycle;
+      }
+    },
+  };
+}
+
 function batches<T>(values: T[], size: number): T[][] {
   const output: T[][] = [];
   for (let offset = 0; offset < values.length; offset += size) {
@@ -365,7 +414,14 @@ export async function indexProject(
     const collectMs = elapsedMilliseconds(collectStartedAt, dependencies.nowMs());
 
     const prepareStartedAt = dependencies.nowMs();
-    const embedding = dependencies.createEmbeddingProvider(config);
+    const embeddingLoad: EmbeddingLoad = { requests: 0, requestMs: 0, idleWaitMs: 0 };
+    const embedding = pacedEmbedding(
+      dependencies.createEmbeddingProvider(config),
+      config.index.embeddingDutyCycle,
+      embeddingLoad,
+      dependencies.nowMs,
+      dependencies.sleep,
+    );
     const vectorStore = dependencies.createVectorStore(config, stateRoot);
     const dimension = await withEmbeddingRetry(
       () => embedding.probeDimension(),
@@ -519,7 +575,7 @@ export async function indexProject(
       if (indexedFileSample.length < 100) indexedFileSample.push(file.relativePath);
       for (const [chunkIndex, chunk] of chunks.entries()) {
         pending.push({ file, fileHash: read.hash, chunk, id: ids[chunkIndex]! });
-        if (pending.length >= EMBEDDING_BATCH_SIZE) await flush();
+        if (pending.length >= config.index.embeddingBatchSize) await flush();
       }
     }
     await flush();
@@ -694,6 +750,13 @@ export async function indexProject(
       chunksUpserted,
       chunksDeleted: staleIds.length,
       rebuiltCollection,
+      embeddingLoad: {
+        batchSize: config.index.embeddingBatchSize,
+        dutyCycle: config.index.embeddingDutyCycle,
+        requests: embeddingLoad.requests,
+        requestMs: Math.round(embeddingLoad.requestMs),
+        idleWaitMs: Math.round(embeddingLoad.idleWaitMs),
+      },
       graph,
       timingsMs: {
         collect: collectMs,

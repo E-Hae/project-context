@@ -41,6 +41,8 @@ export interface ProjectContextConfig {
   exclude: string[];
   index: {
     reuseMainWorktree: boolean;
+    embeddingBatchSize: number;
+    embeddingDutyCycle: number;
   };
   services: {
     ollama: {
@@ -81,6 +83,8 @@ export const DEFAULT_CONFIG: ProjectContextConfig = {
   exclude: DEFAULT_EXCLUDES,
   index: {
     reuseMainWorktree: false,
+    embeddingBatchSize: 64,
+    embeddingDutyCycle: 1,
   },
   services: {
     ollama: {
@@ -129,6 +133,8 @@ const rawConfigSchema = z
     index: z
       .object({
         reuseMainWorktree: z.boolean().optional(),
+        embeddingBatchSize: z.number().int().min(1).max(64).optional(),
+        embeddingDutyCycle: z.number().min(0.05).max(1).optional(),
       })
       .strict()
       .optional(),
@@ -207,6 +213,10 @@ function mergeConfig(raw: z.infer<typeof rawConfigSchema>): ProjectContextConfig
     index: {
       reuseMainWorktree:
         raw.index?.reuseMainWorktree ?? DEFAULT_CONFIG.index.reuseMainWorktree,
+      embeddingBatchSize:
+        raw.index?.embeddingBatchSize ?? DEFAULT_CONFIG.index.embeddingBatchSize,
+      embeddingDutyCycle:
+        raw.index?.embeddingDutyCycle ?? DEFAULT_CONFIG.index.embeddingDutyCycle,
     },
     services: {
       ollama: {

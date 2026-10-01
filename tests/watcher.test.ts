@@ -35,6 +35,13 @@ function summary(run: number): IndexSummary {
     chunksUpserted: run === 1 ? 1 : 0,
     chunksDeleted: 0,
     rebuiltCollection: run === 1,
+    embeddingLoad: {
+      batchSize: 64,
+      dutyCycle: 1,
+      requests: run === 1 ? 1 : 0,
+      requestMs: run === 1 ? 1 : 0,
+      idleWaitMs: 0,
+    },
     timingsMs: { collect: 1, prepare: 1, index: 1, delete: 1, saveState: 1, total: 5 },
   };
 }
