@@ -97,9 +97,6 @@ test("collectProjectStatus does not degrade when no trace adapter is installed",
       if (command === "git") {
         return { ok: true, stdout: currentCommit, stderr: "" };
       }
-      if (command === "rg") {
-        return { ok: true, stdout: "ripgrep 14.1.1", stderr: "" };
-      }
       return { ok: false, stdout: "", stderr: "not found", error: "not found" };
     };
 
@@ -142,7 +139,14 @@ test("collectProjectStatus does not degrade when no trace adapter is installed",
 
     assert.equal(status.status, "ready");
     assert.equal(status.components.git.state, "ready");
-    assert.equal(status.components.ripgrep.state, "ready");
+    // Exact search runs in-process, so status reports no search tool.
+    assert.deepEqual(Object.keys(status.components).sort(), [
+      "git",
+      "handoff",
+      "milvus",
+      "ollama",
+      "trace",
+    ]);
     assert.equal(status.components.ollama.state, "ready");
     assert.equal(status.components.milvus.state, "ready");
     assert.equal(status.components.handoff.state, "ready");
@@ -312,7 +316,6 @@ test("collectProjectStatus normalizes Windows graph snapshot roots", {
             return { ok: true, stdout: root.replaceAll("\\", "/"), stderr: "" };
           }
           if (command === "git") return { ok: true, stdout: commit, stderr: "" };
-          if (command === "rg") return { ok: true, stdout: "ripgrep 14.1.1", stderr: "" };
           return { ok: false, stdout: "", stderr: "not found", error: "not found" };
         },
         fetch: async () => Response.json({
@@ -346,7 +349,6 @@ test("collectProjectStatus reports a malformed trace probe as unavailable", asyn
             return { ok: true, stdout: root, stderr: "" };
           }
           if (command === "git") return { ok: true, stdout: "0123456789abcdef", stderr: "" };
-          if (command === "rg") return { ok: true, stdout: "ripgrep 14.1.1", stderr: "" };
           return { ok: false, stdout: "", stderr: "not found", error: "not found" };
         },
         fetch: async () => Response.json({ models: [{ name: DEFAULT_CONFIG.services.ollama.embeddingModel }] }),
@@ -386,9 +388,6 @@ test("collectProjectStatus does not probe Milvus when the local vector store is 
           }
           if (command === "git") {
             return { ok: true, stdout: "0123456789abcdef", stderr: "" };
-          }
-          if (command === "rg") {
-            return { ok: true, stdout: "ripgrep 14.1.1", stderr: "" };
           }
           return { ok: false, stdout: "", stderr: "not found", error: "not found" };
         },
@@ -451,9 +450,6 @@ test("collectProjectStatus invalidates a local index whose collection is missing
           }
           if (command === "git") {
             return { ok: true, stdout: "0123456789abcdef", stderr: "" };
-          }
-          if (command === "rg") {
-            return { ok: true, stdout: "ripgrep 14.1.1", stderr: "" };
           }
           return { ok: false, stdout: "", stderr: "not found", error: "not found" };
         },
@@ -585,7 +581,6 @@ test("collectProjectStatus reports a reused main worktree index as fresh", async
     await store.ensureCollection(identity.collectionName, 2);
 
     const runCommand: StatusDependencies["runCommand"] = async (command, args) => {
-      if (command === "rg") return { ok: true, stdout: "ripgrep 14.1.1", stderr: "" };
       if (command !== "git") {
         return { ok: false, stdout: "", stderr: "not found", error: "not found" };
       }

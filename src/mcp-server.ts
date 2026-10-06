@@ -74,7 +74,7 @@ export function createProjectContextServer(
     {
       title: "Project context status",
       description:
-        "Checks the project root, configuration, ripgrep, Ollama embedding model, selected vector store, trace-adapter capability, and handoff registration.",
+        "Checks the project root, configuration, Ollama embedding model, selected vector store, trace-adapter capability, and handoff registration.",
       inputSchema: {
         projectPath: z.string().min(1).describe("Absolute or relative project path"),
       },

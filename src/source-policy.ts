@@ -1,6 +1,6 @@
 import path from "node:path";
 
-import { minimatch } from "minimatch";
+import { Minimatch } from "minimatch";
 
 import type { ProjectContextConfig } from "./config.js";
 import {
@@ -97,37 +97,50 @@ function pathKey(value: string): string {
   return process.platform === "win32" ? normalized.toLowerCase() : normalized;
 }
 
-function isInside(target: SourceTarget, absolutePath: string): boolean {
-  const targetKey = pathKey(target.absolutePath);
-  const pathValue = pathKey(absolutePath);
-  if (!target.isDirectory) {
-    return targetKey === pathValue;
+const targetKeys = new WeakMap<SourceTarget, string>();
+
+function targetKey(target: SourceTarget): string {
+  let key = targetKeys.get(target);
+  if (key === undefined) {
+    key = pathKey(target.absolutePath);
+    targetKeys.set(target, key);
   }
-  const relative = path.relative(targetKey, pathValue);
-  return (
-    relative === "" ||
-    (!relative.startsWith(`..${path.sep}`) &&
-      relative !== ".." &&
-      !path.isAbsolute(relative))
-  );
+  return key;
+}
+
+/** Whether a path key from pathKey() lies in a target. */
+function isInside(target: SourceTarget, key: string): boolean {
+  const base = targetKey(target);
+  if (key === base) return true;
+  if (!target.isDirectory) return false;
+  return key.startsWith(base.endsWith(path.sep) ? base : `${base}${path.sep}`);
 }
 
 export function isAllowedTextFile(relativePath: string): boolean {
   return ALLOWED_TEXT_EXTENSIONS.has(path.extname(relativePath).toLowerCase());
 }
 
-export function isExcluded(
-  relativePath: string,
-  patterns: string[],
-): boolean {
-  return patterns.some((pattern) => {
+const excludeMatchers = new Map<string, Minimatch>();
+
+function excludeMatcher(pattern: string): Minimatch {
+  let matcher = excludeMatchers.get(pattern);
+  if (matcher === undefined) {
     const normalizedPattern = pattern.replaceAll("\\", "/").replace(/^\/+/, "");
-    return minimatch(relativePath, normalizedPattern, {
+    matcher = new Minimatch(normalizedPattern, {
       dot: true,
       nocase: process.platform === "win32",
       optimizationLevel: 2,
     });
-  });
+    excludeMatchers.set(pattern, matcher);
+  }
+  return matcher;
+}
+
+export function isExcluded(
+  relativePath: string,
+  patterns: string[],
+): boolean {
+  return patterns.some((pattern) => excludeMatcher(pattern).match(relativePath));
 }
 
 /** Index of the first configured target that contains a path, or -1. */
@@ -135,14 +148,16 @@ export function sourceTargetIndex(
   absolutePath: string,
   targets: SourceTarget[],
 ): number {
-  return targets.findIndex((target) => isInside(target, absolutePath));
+  const key = pathKey(absolutePath);
+  return targets.findIndex((target) => isInside(target, key));
 }
 
 export function classifySource(
   absolutePath: string,
   targets: SourceTarget[],
 ): SourceKind | null {
-  const matching = targets.filter((target) => isInside(target, absolutePath));
+  const key = pathKey(absolutePath);
+  const matching = targets.filter((target) => isInside(target, key));
   if (matching.some((target) => target.source === "document")) {
     return "document";
   }

@@ -17,7 +17,7 @@ line ranges so an agent or developer can verify the underlying code.
 
 | Capability | What it does |
 | --- | --- |
-| Exact search | Fast, deterministic `rg` search with configured source and exclusion rules. |
+| Exact search | Fast, deterministic in-process search with configured source and exclusion rules, `.gitignore`, and `.ignore`. |
 | Semantic search | Project-isolated embeddings in a persistent local vector store by default, validated against current file hashes. |
 | GraphRAG | `auto` code search expands verified vector seeds through a bounded, persisted source graph and can attach a compact, source-citable project-to-directory hierarchy. |
 | Graph tracing | Optional language adapters return source-backed callers, callees, base types, and the types that inherit or implement a type. |
@@ -122,7 +122,6 @@ Over MCP, `context_search` leaves out `graph.summaries` unless the request sets
 ## Requirements
 
 - Node.js 20 or newer
-- `rg` (ripgrep) for exact search
 - An Ollama embedding model configured for semantic search
 
 The core package runs status, exact search, and semantic search without .NET,

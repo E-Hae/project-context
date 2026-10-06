@@ -75,7 +75,6 @@ export interface ProjectStatus {
   exclude: string[];
   components: {
     git: ComponentStatus;
-    ripgrep: ComponentStatus;
     ollama: ComponentStatus;
     milvus: ComponentStatus;
     trace: ComponentStatus;
@@ -239,32 +238,6 @@ function mergeDependencies(
   overrides: Partial<StatusDependencies>,
 ): StatusDependencies {
   return { ...DEFAULT_DEPENDENCIES, ...overrides };
-}
-
-function firstLine(value: string): string {
-  return value.split(/\r?\n/, 1)[0]?.trim() ?? "";
-}
-
-async function checkCommand(
-  deps: StatusDependencies,
-  command: string,
-  args: string[],
-  timeoutMs: number,
-): Promise<ComponentStatus> {
-  const result = await deps.runCommand(command, args, timeoutMs);
-  if (!result.ok) {
-    return {
-      state: "missing",
-      detail: result.error ?? result.stderr ?? `${command} is unavailable`,
-    };
-  }
-
-  const version = firstLine(result.stdout);
-  return {
-    state: "ready",
-    detail: version || `${command} is available`,
-    ...(version ? { version } : {}),
-  };
 }
 
 interface OllamaTagsResponse {
@@ -510,7 +483,6 @@ function unavailableStatus(requestedPath: string, checkedAt: string): ProjectSta
     exclude: [],
     components: {
       git: unavailable,
-      ripgrep: unavailable,
       ollama: unavailable,
       milvus: unavailable,
       trace: unavailable,
@@ -652,8 +624,7 @@ export async function collectProjectStatus(
   }
 
   const usesMilvus = config.value.services.vectorStore.backend === "milvus";
-  const [ripgrep, ollama, milvus, trace, handoff] = await Promise.all([
-    checkCommand(deps, "rg", ["--version"], timeoutMs),
+  const [ollama, milvus, trace, handoff] = await Promise.all([
     checkOllama(deps, config.value, timeoutMs),
     usesMilvus
       ? checkMilvus(deps, config.value, timeoutMs)
@@ -933,7 +904,6 @@ export async function collectProjectStatus(
   if (!config.exists) missing.push("config");
   if (!config.valid) missing.push("config:invalid");
   if (git.state !== "ready") missing.push("git");
-  if (ripgrep.state !== "ready") missing.push("ripgrep");
   if (ollama.state !== "ready") missing.push("ollama");
   if (usesMilvus && milvus.state !== "ready") missing.push("milvus");
   if (handoff.state !== "ready") missing.push("handoff");
@@ -941,8 +911,7 @@ export async function collectProjectStatus(
   if (index.state === "stale") missing.push("index:stale");
   if (index.state === "invalid") missing.push("index:invalid");
 
-  const criticalMissing = !config.valid || ripgrep.state !== "ready";
-  const status = criticalMissing
+  const status = !config.valid
     ? "unavailable"
     : missing.length === 0
       ? "ready"
@@ -967,7 +936,6 @@ export async function collectProjectStatus(
     exclude: config.value.exclude,
     components: {
       git,
-      ripgrep,
       ollama,
       milvus,
       trace,

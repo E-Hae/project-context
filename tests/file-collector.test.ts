@@ -63,3 +63,23 @@ test("collectProjectFiles returns configured UTF-8 text files without duplicates
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("collectProjectFiles reports a timeout", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "project-context-files-"));
+  try {
+    for (let index = 0; index < 300; index += 1) {
+      await mkdir(path.join(root, "src", `dir${index}`), { recursive: true });
+    }
+    const config = {
+      ...DEFAULT_CONFIG,
+      sources: { ...DEFAULT_CONFIG.sources, code: ["src"], documents: [] },
+    };
+    const targets = await resolveSourceTargets(root, config, "all");
+    await assert.rejects(
+      collectProjectFiles(root, targets, [], 1),
+      /File collection timed out after 1ms/,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});

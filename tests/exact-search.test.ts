@@ -5,6 +5,7 @@ import path from "node:path";
 import test from "node:test";
 
 import { searchExact } from "../src/exact-search.js";
+import { withGitConfigHome } from "./git-config-fixture.js";
 import { writeProjectConfig } from "./project-config-fixture.js";
 
 async function createFixture(): Promise<string> {
@@ -115,7 +116,7 @@ test("searchExact caps global results and reports truncation", async () => {
   }
 });
 
-test("searchExact keeps sorted ripgrep order while ripgrep searches unsorted", async () => {
+test("searchExact orders evidence by target, then by directory entry names", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "project-context-search-order-"));
   try {
     await mkdir(path.join(root, "src", "a"), { recursive: true });
@@ -190,6 +191,120 @@ test("searchExact requires project config and rejects escaping source paths", as
     await assert.rejects(
       searchExact({ projectPath: root, query: "Needle" }),
       /escapes the project root/,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("searchExact skips binary files and decodes byte-order marks", async () => {
+  const root = await createFixture();
+  try {
+    await writeFile(path.join(root, "src", "Binary.cs"), "Needle binary\0\n");
+    await writeFile(
+      path.join(root, "src", "Bom.cs"),
+      Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from("Needle bom\r\nx\r\n")]),
+    );
+    await writeFile(
+      path.join(root, "src", "Utf16.cs"),
+      Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from("x\nNeedle utf16\n", "utf16le")]),
+    );
+    await writeFile(
+      path.join(root, "src", "Utf16Be.cs"),
+      Buffer.concat([
+        Buffer.from([0xfe, 0xff]),
+        Buffer.from("Needle be\n", "utf16le").swap16(),
+      ]),
+    );
+
+    const result = await searchExact({ projectPath: root, query: "Needle", scope: "code" });
+    assert.deepEqual(
+      result.results.map((item) => [item.path, item.lineStart, item.text]),
+      [
+        ["src/Bom.cs", 1, "Needle bom"],
+        ["src/Feature.cs", 1, "Needle first"],
+        ["src/Feature.cs", 3, "Needle second"],
+        ["src/Utf16.cs", 2, "Needle utf16"],
+        ["src/Utf16Be.cs", 1, "Needle be"],
+      ],
+    );
+
+    // Path search lists a binary file; only content search skips it.
+    const paths = await searchExact({ projectPath: root, query: "src/Binary.cs" });
+    assert.deepEqual(paths.results.map((item) => item.path), ["src/Binary.cs"]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("searchExact bounds the text of a very long matching line", async () => {
+  const root = await createFixture();
+  try {
+    await writeFile(
+      path.join(root, "src", "Long.cs"),
+      `${"x".repeat(3 * 1024 * 1024)}Needle\nNeedle short\n`,
+      "utf8",
+    );
+    const result = await searchExact({ projectPath: root, query: "Needle", scope: "code" });
+    const long = result.results.filter((item) => item.path === "src/Long.cs");
+    assert.deepEqual(long.map((item) => [item.lineStart, item.text.length]), [
+      [1, 2_000],
+      [2, "Needle short".length],
+    ]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("searchExact searches explicitly configured files whatever their extension", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "project-context-search-"));
+  try {
+    await writeProjectConfig(
+      root,
+      "version: 1\nsources:\n  code: []\n  documents: [LICENSE]\n",
+    );
+    await writeFile(path.join(root, "LICENSE"), "MIT Needle\n", "utf8");
+    const result = await searchExact({ projectPath: root, query: "Needle" });
+    assert.deepEqual(
+      result.results.map((item) => [item.source, item.path, item.lineStart]),
+      [["document", "LICENSE", 1]],
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("searchExact honors .gitignore inside a repository", async () => {
+  const root = await createFixture();
+  try {
+    await mkdir(path.join(root, ".git"));
+    await mkdir(path.join(root, "src", "cache"));
+    await writeFile(path.join(root, ".gitignore"), "/src/cache/\n", "utf8");
+    await writeFile(path.join(root, "src", "cache", "Cached.cs"), "Needle cached\n", "utf8");
+    const result = await withGitConfigHome(path.join(root, "no-home"), () =>
+      searchExact({ projectPath: root, query: "Needle", scope: "code" }));
+    assert.deepEqual(
+      result.results.map((item) => item.path),
+      ["src/Feature.cs", "src/Feature.cs"],
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("searchExact rejects multi-line content queries and reports timeouts", async () => {
+  const root = await createFixture();
+  try {
+    await assert.rejects(
+      searchExact({ projectPath: root, query: "Needle\nfirst" }),
+      /must not contain a line break/,
+    );
+    for (let index = 0; index < 300; index += 1) {
+      await mkdir(path.join(root, "src", `dir${index}`));
+    }
+    await assert.rejects(
+      searchExact({ projectPath: root, query: "Needle", timeoutMs: 1 }),
+      /Exact search timed out after 1ms/,
     );
   } finally {
     await rm(root, { recursive: true, force: true });

@@ -10,6 +10,8 @@ All notable changes to Project Context MCP are documented in this file.
 
 ### Changed
 
+- Exact search and file collection run in-process and no longer need ripgrep (`rg`). Files are still chosen by the configured globs, directories by `.ignore`, `.gitignore`, `.git/info/exclude`, the global Git excludes file, and hidden names; content search still skips binary files, decodes UTF-8 and UTF-16 byte-order marks, and keeps the same result order. A directory that a parent `.gitignore` ignores is now skipped even when several sibling source roots are searched; ripgrep sometimes searched it in that case. Content search now skips every file that contains a NUL byte, where ripgrep could still report matches before the first NUL. `.rgignore` files are no longer read, a Windows hidden attribute without a leading dot no longer hides a directory, files larger than 256 MiB are not searched, and a content query containing a line break is rejected with a message that no longer comes from ripgrep.
+- `context_status` no longer reports `components.ripgrep`, and a missing ripgrep no longer makes the status `unavailable` or adds `ripgrep` to `missing`. Clients that read `components.ripgrep` need to stop.
 - The default embedding model is now `qwen3-embedding:0.6b`; projects can still choose another installed model with `services.ollama.embeddingModel`.
 - Embedding inputs follow the model family: Qwen3 queries use a code-search instruction and documents stay unchanged; Nomic keeps its retrieval prefixes; other models receive unchanged text.
 - Index state records a fingerprint of the effective query and document prompts. A changed prompt format, model change, or legacy index without the fingerprint triggers a full rebuild on the next indexing run.
