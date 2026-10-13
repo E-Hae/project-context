@@ -34,7 +34,7 @@ async function registerHandoffProject(
   );
 }
 
-test("handoff store resolves markers case-insensitively and reads Markdown verbatim", async () => {
+test("handoff store resolves markers (case-insensitively on Windows) and reads Markdown verbatim", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "project-context-handoff-"));
   const projectRoot = path.join(root, "GameProject");
   const handoffRoot = path.join(root, "handoff");
@@ -46,7 +46,11 @@ test("handoff store resolves markers case-insensitively and reads Markdown verba
     await mkdir(emptyFolder, { recursive: true });
     await writeFile(
       path.join(projectFolder, ".project-path"),
-      `${projectRoot.replaceAll("\\", "/").toUpperCase()}\n`,
+      `${
+        process.platform === "win32"
+          ? projectRoot.replaceAll("\\", "/").toUpperCase()
+          : projectRoot
+      }\n`,
       "utf8",
     );
     await writeFile(
@@ -104,6 +108,34 @@ test("handoff store resolves markers case-insensitively and reads Markdown verba
       (error: unknown) =>
         error instanceof HandoffStoreError && error.code === "invalid_label",
     );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("handoff store collapses . and .. and trailing separators in markers", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "project-context-handoff-"));
+  const projectRoot = path.join(root, "GameProject");
+  const handoffRoot = path.join(root, "handoff");
+  try {
+    await mkdir(projectRoot, { recursive: true });
+    await registerHandoffProject(
+      handoffRoot,
+      "decoy-project",
+      path.join(root, "Other"),
+    );
+    await registerHandoffProject(
+      handoffRoot,
+      "game-project",
+      `${path.join(root, "Other", "..", ".", "GameProject")}${path.sep}`,
+    );
+
+    const listed = await listHandoffs(
+      { projectPath: projectRoot },
+      { handoffRoot },
+    );
+    assert.equal(listed.totalProjects, 1);
+    assert.equal(listed.projects[0]!.projectSlug, "game-project");
   } finally {
     await rm(root, { recursive: true, force: true });
   }

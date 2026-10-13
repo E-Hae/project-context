@@ -104,11 +104,12 @@ export interface HandoffUpdateInput extends HandoffSaveInput {
 }
 
 function pathKey(value: string): string {
-  return value
-    .trim()
-    .replaceAll("\\", "/")
-    .replace(/\/+$/, "")
-    .toLocaleLowerCase("en-US");
+  const normalized = path.normalize(value.trim().replaceAll("\\", "/"));
+  const key =
+    normalized.length > path.parse(normalized).root.length
+      ? normalized.replace(/[\\/]+$/, "")
+      : normalized;
+  return process.platform === "win32" ? key.toLowerCase() : key;
 }
 
 function isInside(root: string, candidate: string): boolean {
