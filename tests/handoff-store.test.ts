@@ -1,5 +1,13 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  realpath,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -14,6 +22,7 @@ import {
   updateHandoff,
 } from "../src/handoff-store.js";
 import { createLinkedWorktree, gitAvailable } from "./git-worktree-fixture.js";
+import { withHome } from "./home-fixture.js";
 
 async function registerHandoffProject(
   handoffRoot: string,
@@ -141,6 +150,65 @@ test("handoff store collapses . and .. and trailing separators in markers", asyn
   }
 });
 
+test("handoff store matches ~/ markers and writes new markers under home as ~/", async () => {
+  const root = await realpath(
+    await mkdtemp(path.join(tmpdir(), "project-context-handoff-home-")),
+  );
+  const home = path.join(root, "home");
+  const hubRoot = path.join(home, "Projects", "agent-hub");
+  const newRoot = path.join(home, "Projects", "NewApp");
+  const handoffRoot = path.join(root, "handoff");
+  const content = "---\ntitle: Saved plan\ndate: 2026-10-15\n---\n\n# Saved plan\nBody\n";
+  try {
+    await mkdir(hubRoot, { recursive: true });
+    await mkdir(newRoot, { recursive: true });
+    await mkdir(path.join(handoffRoot, "agent-hub"), { recursive: true });
+    await writeFile(
+      path.join(handoffRoot, "agent-hub", ".project-path"),
+      "~/Projects/agent-hub\n",
+      "utf8",
+    );
+    await writeFile(
+      path.join(handoffRoot, "agent-hub", "notes_hub.md"),
+      "---\ntitle: Hub notes\ndate: 2026-10-15\n---\n\n# Notes\n",
+      "utf8",
+    );
+
+    await withHome(home, async () => {
+      const listed = await listHandoffs({ projectPath: hubRoot }, { handoffRoot });
+      assert.equal(listed.totalProjects, 1);
+      assert.equal(listed.projects[0]!.projectSlug, "agent-hub");
+      assert.equal(listed.projects[0]!.projectPath, hubRoot);
+      assert.deepEqual(
+        listed.projects[0]!.documents.map((document) => document.label),
+        ["notes_hub"],
+      );
+
+      const saved = await saveHandoff(
+        { projectPath: hubRoot, label: "plan_saved", content },
+        { handoffRoot },
+      );
+      assert.equal(saved.projectSlug, "agent-hub");
+
+      const created = await saveHandoff(
+        { projectPath: newRoot, label: "plan_saved", content },
+        { handoffRoot },
+      );
+      assert.equal(created.projectSlug, "newapp");
+      assert.equal(created.projectPath, newRoot);
+      assert.equal(
+        await readFile(path.join(handoffRoot, "newapp", ".project-path"), "utf8"),
+        "~/Projects/NewApp\n",
+      );
+      const reloaded = await listHandoffs({ projectPath: newRoot }, { handoffRoot });
+      assert.equal(reloaded.projects[0]!.projectSlug, "newapp");
+    });
+    assert.deepEqual((await readdir(handoffRoot)).sort(), ["agent-hub", "newapp"]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 for (const worktreePath of [
   path.join(".worktrees", "feature-1"),
   path.join(".claude", ".worktrees", "feature-1"),
@@ -196,9 +264,13 @@ test("handoff store creates, replaces, and appends documents safely", async () =
         error instanceof HandoffStoreError && error.code === "invalid_content",
     );
 
-    const created = await saveHandoff(
-      { projectPath: projectRoot, label: "plan_automation", content: initial },
-      { handoffRoot },
+    // Pin the home directory away from the temporary root: on Windows the
+    // default temporary directory lies under home, which folds the marker.
+    const created = await withHome(path.join(root, "home"), () =>
+      saveHandoff(
+        { projectPath: projectRoot, label: "plan_automation", content: initial },
+        { handoffRoot },
+      ),
     );
     assert.equal(created.operation, "created");
     assert.equal(created.projectSlug, "gameproject");

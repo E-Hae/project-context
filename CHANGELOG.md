@@ -15,6 +15,11 @@ All notable changes to Project Context MCP are documented in this file.
 - The default embedding model is now `qwen3-embedding:0.6b`; projects can still choose another installed model with `services.ollama.embeddingModel`.
 - Embedding inputs follow the model family: Qwen3 queries use a code-search instruction and documents stay unchanged; Nomic keeps its retrieval prefixes; other models receive unchanged text.
 - Index state records a fingerprint of the effective query and document prompts. A changed prompt format, model change, or legacy index without the fingerprint triggers a full rebuild on the next indexing run.
+- A new handoff project folder under the home directory gets a `.project-path` marker written as `~/...` (slash-separated) instead of an absolute path, so the marker still matches on a machine whose home directory differs. Projects outside the home directory keep an absolute marker.
+
+### Fixed
+
+- Handoff tools and `context_status` resolve `.project-path` markers written as `~` or `~/...` against the home directory. Before, such a marker never matched, so `context_handoff_list` reported no registered project and `context_handoff_save` created a second folder such as `agent-hub-2`.
 
 ## 2.8.0 - 2026-09-28
 

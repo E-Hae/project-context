@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import { realpath, stat } from "node:fs/promises";
+import { homedir } from "node:os";
 import path from "node:path";
 
 export class ProjectPathError extends Error {
@@ -126,6 +127,36 @@ export async function resolveHeadCommit(
 ): Promise<string | null> {
   const commit = await runGit(gitArgs(root, "rev-parse", "HEAD"), timeoutMs);
   return commit.ok && commit.stdout ? commit.stdout : null;
+}
+
+/**
+ * Resolves a `.project-path` marker written as `~` or `~/...` against this
+ * machine's home directory; any other marker is returned unchanged.
+ */
+export function expandHomeMarker(marker: string): string {
+  if (marker === "~") return homedir();
+  if (marker.startsWith("~/") || marker.startsWith("~\\")) {
+    return path.join(homedir(), marker.slice(2));
+  }
+  return marker;
+}
+
+/**
+ * Folds a project root at or under the home directory into the `~/...` marker
+ * form (slash-separated) so the marker holds on a machine whose home differs;
+ * a root outside the home directory is returned unchanged.
+ */
+export function foldHomeMarker(projectRoot: string): string {
+  const trimmed = (value: string) => path.normalize(value).replace(/[\\/]+$/, "");
+  const comparable = (value: string) =>
+    process.platform === "win32" ? value.toLowerCase() : value;
+  const home = trimmed(homedir());
+  const root = trimmed(projectRoot);
+  if (comparable(root) === comparable(home)) return "~";
+  if (comparable(root).startsWith(comparable(home) + path.sep)) {
+    return `~/${root.slice(home.length + 1).split(path.sep).join("/")}`;
+  }
+  return projectRoot;
 }
 
 export function normalizePathForComparison(value: string): string {

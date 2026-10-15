@@ -17,6 +17,8 @@ import path from "node:path";
 import { parse as parseYaml } from "yaml";
 
 import {
+  expandHomeMarker,
+  foldHomeMarker,
   resolveMainWorktreeRoot,
   resolveProjectRoot,
 } from "./project-path.js";
@@ -183,10 +185,11 @@ async function registeredProjects(
     try {
       const projectFolderPath = await realpath(candidateFolder);
       if (!isInside(root, projectFolderPath)) continue;
-      const projectPath = (
+      const marker = (
         await readFile(path.join(projectFolderPath, ".project-path"), "utf8")
       ).trim();
-      if (!projectPath || projectPath.includes("\0")) continue;
+      if (!marker || marker.includes("\0")) continue;
+      const projectPath = expandHomeMarker(marker);
       projects.push({
         projectSlug: entry.name,
         projectPath,
@@ -320,7 +323,7 @@ async function resolveWritableTargetProject(
       }
       await writeFile(
         path.join(projectFolderPath, ".project-path"),
-        `${projectRoot}\n`,
+        `${foldHomeMarker(projectRoot)}\n`,
         { encoding: "utf8", flag: "wx" },
       );
       return { projectSlug, projectPath: projectRoot, projectFolderPath };

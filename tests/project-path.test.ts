@@ -4,8 +4,14 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { parseMainWorktreeRoot, resolveIndexRoot } from "../src/project-path.js";
+import {
+  expandHomeMarker,
+  foldHomeMarker,
+  parseMainWorktreeRoot,
+  resolveIndexRoot,
+} from "../src/project-path.js";
 import { createLinkedWorktree, gitAvailable } from "./git-worktree-fixture.js";
+import { withHome } from "./home-fixture.js";
 
 const MAIN_ROOT = "/repo/main";
 const LINKED_ROOT = "/repo/main/.worktrees/feature";
@@ -41,6 +47,27 @@ test("mainWorktreeRoot reports no main worktree for a bare repository", () => {
   ].join("\n");
 
   assert.equal(parseMainWorktreeRoot(porcelain, LINKED_ROOT), null);
+});
+
+test("home markers expand ~/ against the home directory and fold paths under it", async () => {
+  const home = path.join(tmpdir(), "project-context-home");
+  await withHome(home, async () => {
+    assert.equal(expandHomeMarker("~"), home);
+    assert.equal(expandHomeMarker("~/Projects/Hub"), path.join(home, "Projects", "Hub"));
+    assert.equal(expandHomeMarker("/srv/project"), "/srv/project");
+    assert.equal(expandHomeMarker("~other/project"), "~other/project");
+
+    assert.equal(foldHomeMarker(home), "~");
+    assert.equal(foldHomeMarker(`${home}${path.sep}`), "~");
+    assert.equal(foldHomeMarker(path.join(home, "Projects", "Hub")), "~/Projects/Hub");
+    assert.equal(foldHomeMarker(`${home}-sibling`), `${home}-sibling`);
+    const outside = path.join(tmpdir(), "elsewhere");
+    assert.equal(foldHomeMarker(outside), outside);
+    if (process.platform === "win32") {
+      assert.equal(expandHomeMarker("~\\Projects\\Hub"), path.join(home, "Projects", "Hub"));
+      assert.equal(foldHomeMarker(path.join(home.toUpperCase(), "Hub")), "~/Hub");
+    }
+  });
 });
 
 test("resolveIndexRoot redirects a linked worktree to the main worktree", async (t) => {

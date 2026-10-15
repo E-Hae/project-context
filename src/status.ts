@@ -24,6 +24,7 @@ import {
 import { loadProjectSummary, loadProjectSummaryPayload } from "./summary-store.js";
 import { MilvusRestClient } from "./milvus-rest-client.js";
 import {
+  expandHomeMarker,
   normalizePathForComparison,
   parseMainWorktreeRoot,
 } from "./project-path.js";
@@ -434,7 +435,7 @@ async function checkHandoff(
 
       const markerPath = path.join(deps.handoffRoot, entry.name, ".project-path");
       try {
-        const marker = (await readFile(markerPath, "utf8")).trim();
+        const marker = expandHomeMarker((await readFile(markerPath, "utf8")).trim());
         if (normalizePathForComparison(marker) === expectedRoot) {
           return {
             state: "ready",

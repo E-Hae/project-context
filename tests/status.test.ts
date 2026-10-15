@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -23,6 +23,7 @@ import {
 } from "../src/status.js";
 import { LocalVectorStore } from "../src/local-vector-store.js";
 import { saveProjectSummary } from "../src/summary-store.js";
+import { withHome } from "./home-fixture.js";
 import { writeProjectConfig } from "./project-config-fixture.js";
 
 test("collectProjectStatus returns unavailable for a missing project", async () => {
@@ -517,6 +518,56 @@ test("collectProjectStatus degrades when Git metadata is unavailable", async () 
     assert.equal(status.components.handoff.state, "ready");
     assert.match(status.components.handoff.detail, /disabled/i);
     assert.deepEqual(status.missing, ["git", "index:not_initialized"]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("collectProjectStatus matches a handoff marker written as ~/ under the home directory", async () => {
+  const root = await realpath(
+    await mkdtemp(path.join(tmpdir(), "project-context-status-home-")),
+  );
+  const home = path.join(root, "home");
+  const projectRoot = path.join(home, "Projects", "Hub");
+  const handoffRoot = path.join(root, "handoff");
+  const dependencies = {
+    runCommand: (async () => ({
+      ok: false,
+      stdout: "",
+      stderr: "not a git repository",
+      error: "not a git repository",
+    })) as StatusDependencies["runCommand"],
+    fetch: (async () =>
+      Response.json({
+        models: [{ name: DEFAULT_CONFIG.services.ollama.embeddingModel }],
+      })) as typeof fetch,
+    probeTcp: async () => true,
+    handoffRoot,
+    stateRoot: path.join(root, "state"),
+  };
+  const writeMarker = (marker: string) =>
+    writeFile(path.join(handoffRoot, "hub", ".project-path"), `${marker}\n`, "utf8");
+
+  try {
+    await writeProjectConfig(
+      projectRoot,
+      ["version: 1", "sources:", "  handoff:", "    enabled: true", ""].join("\n"),
+    );
+    await mkdir(path.join(handoffRoot, "hub"), { recursive: true });
+
+    await withHome(home, async () => {
+      const markers = ["~/Projects/Hub"];
+      if (process.platform === "win32") markers.push("~\\Projects\\Hub");
+      for (const marker of markers) {
+        await writeMarker(marker);
+        const status = await collectProjectStatus(projectRoot, { dependencies });
+        assert.equal(status.components.handoff.state, "ready", marker);
+      }
+
+      await writeMarker("~/Projects/Other");
+      const status = await collectProjectStatus(projectRoot, { dependencies });
+      assert.equal(status.components.handoff.state, "missing");
+    });
   } finally {
     await rm(root, { recursive: true, force: true });
   }
