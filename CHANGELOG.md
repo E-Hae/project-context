@@ -2,7 +2,7 @@
 
 All notable changes to Project Context MCP are documented in this file.
 
-## Unreleased
+## 2.9.0 - 2026-10-15
 
 ### Added
 
